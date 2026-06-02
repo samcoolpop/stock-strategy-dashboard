@@ -1,0 +1,86 @@
+name: Sync stock strategy data
+
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Task to run"
+        required: true
+        default: "both"
+        type: choice
+        options:
+          - both
+          - monitor
+          - close-scan
+  schedule:
+    # Beijing 14:30. Monitor existing candidates.
+    - cron: "30 6 * * 1-5"
+    # Beijing 15:40. Add newly confirmed two-limit-up candidates after close.
+    - cron: "40 7 * * 1-5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stock-strategy-data
+  cancel-in-progress: false
+
+jobs:
+  sync-data:
+    runs-on: ubuntu-latest
+    env:
+      APP_DATA_SOURCE: akshare
+      APP_DB_PATH: stock_strategy.sqlite3
+      TZ: Asia/Shanghai
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Initialize database
+        run: python -m src.jobs init-db
+
+      - name: Run scheduled task
+        shell: bash
+        run: |
+          set -e
+          INPUT_JOB="${{ github.event.inputs.job }}"
+          EVENT_SCHEDULE="${{ github.event.schedule }}"
+          if [ -z "$INPUT_JOB" ]; then
+            if [ "$EVENT_SCHEDULE" = "30 6 * * 1-5" ]; then
+              INPUT_JOB="monitor"
+            elif [ "$EVENT_SCHEDULE" = "40 7 * * 1-5" ]; then
+              INPUT_JOB="close-scan"
+            else
+              INPUT_JOB="both"
+            fi
+          fi
+
+          if [ "$INPUT_JOB" = "monitor" ] || [ "$INPUT_JOB" = "both" ]; then
+            python -m src.jobs monitor
+          fi
+          if [ "$INPUT_JOB" = "close-scan" ] || [ "$INPUT_JOB" = "both" ]; then
+            python -m src.jobs close-scan
+          fi
+
+      - name: Commit updated database
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f stock_strategy.sqlite3
+          if git diff --cached --quiet; then
+            echo "No database changes to commit."
+          else
+            git commit -m "Update stock strategy data"
+            git push
+          fi
