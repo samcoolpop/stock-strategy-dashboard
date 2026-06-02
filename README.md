@@ -62,6 +62,16 @@ python -m src.jobs test-email
 
 任务工作目录设置为本项目目录。
 
+## 云端同步
+
+仓库包含 GitHub Actions 工作流 `.github/workflows/sync-data.yml`：
+
+- 北京时间 14:30 运行 `python -m src.jobs monitor`
+- 北京时间 15:40 运行 `python -m src.jobs close-scan`
+- 任务完成后把 `stock_strategy.sqlite3` 提交回仓库
+
+Streamlit Cloud 会从仓库读取数据库文件。首次部署或手动刷新后，小伙伴访问公网地址即可看到最新已同步的数据。
+
 ## 策略规则
 
 - 二连板入池，收盘后确认。
