@@ -1,0 +1,9 @@
+.env
+.wencai_browser/
+stock_strategy.sqlite3
+__pycache__/
+.pytest_cache/
+.streamlit/
+*.log
+wencai_*_debug.png
+*.pyc
