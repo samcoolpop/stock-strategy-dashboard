@@ -35,14 +35,15 @@ def status_zh(value: str | None) -> str:
 @st.cache_data(ttl=30)
 def dashboard_db_path() -> str:
     settings = get_settings()
-    if not settings.remote_db_url:
+    remote_db_url = getattr(settings, "remote_db_url", "")
+    if not remote_db_url:
         return str(settings.db_path)
 
     cache_dir = ROOT_DIR / ".cache"
     cache_dir.mkdir(exist_ok=True)
     remote_path = cache_dir / "dashboard_stock_strategy.sqlite3"
     try:
-        with urlopen(settings.remote_db_url, timeout=15) as response:
+        with urlopen(remote_db_url, timeout=15) as response:
             content = response.read()
         if content.startswith(b"SQLite format 3"):
             remote_path.write_bytes(content)
@@ -54,11 +55,14 @@ def dashboard_db_path() -> str:
 
 @st.cache_data(ttl=30)
 def read_sql(query: str, params: tuple = ()) -> pd.DataFrame:
-    db_path = Path(dashboard_db_path())
-    if not db_path.exists():
+    try:
+        db_path = Path(dashboard_db_path())
+        if not db_path.exists():
+            return pd.DataFrame()
+        with sqlite3.connect(db_path) as conn:
+            return pd.read_sql_query(query, conn, params=params)
+    except Exception:
         return pd.DataFrame()
-    with sqlite3.connect(db_path) as conn:
-        return pd.read_sql_query(query, conn, params=params)
 
 
 def init_database_if_needed() -> None:
@@ -156,7 +160,10 @@ def home_page() -> None:
     init_database_if_needed()
     if st.button("刷新数据"):
         st.cache_data.clear()
-        st.rerun()
+        if hasattr(st, "rerun"):
+            st.rerun()
+        elif hasattr(st, "experimental_rerun"):
+            st.experimental_rerun()
 
     data = load_home_data()
     latest_monitor = data["latest_monitor"]
