@@ -66,7 +66,7 @@ python -m src.jobs test-email
 
 仓库包含 GitHub Actions 工作流 `.github/workflows/sync-data.yml`：
 
-- 北京时间 14:30 运行 `python -m src.jobs monitor`
+- 北京时间 14:10、14:15、14:20 冗余运行 `python -m src.jobs monitor`
 - 北京时间 15:40 运行 `python -m src.jobs close-scan`
 - 任务完成后把 `stock_strategy.sqlite3` 提交回仓库
 

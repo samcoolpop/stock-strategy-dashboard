@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
+from urllib.request import urlopen
 
 import pandas as pd
 import streamlit as st
 
-from src.config import get_settings
+from src.config import ROOT_DIR, get_settings
 from src.db import Database
 
 
-st.set_page_config(page_title="二连板策略看板", page_icon="📈", layout="wide")
+st.set_page_config(page_title="二连板策略看板", page_icon="chart_with_upwards_trend", layout="wide")
 
 
 STATUS_LABELS = {
@@ -17,15 +19,45 @@ STATUS_LABELS = {
     "passed": "通过",
     "expired": "过期",
     "watching": "观察中",
+    "failed": "失败",
+    "success": "成功",
+    "running": "运行中",
+    "skipped": "跳过",
 }
+
+
+def status_zh(value: str | None) -> str:
+    if value is None:
+        return ""
+    return STATUS_LABELS.get(value, value)
+
+
+@st.cache_data(ttl=30)
+def dashboard_db_path() -> str:
+    settings = get_settings()
+    if not settings.remote_db_url:
+        return str(settings.db_path)
+
+    cache_dir = ROOT_DIR / ".cache"
+    cache_dir.mkdir(exist_ok=True)
+    remote_path = cache_dir / "dashboard_stock_strategy.sqlite3"
+    try:
+        with urlopen(settings.remote_db_url, timeout=15) as response:
+            content = response.read()
+        if content.startswith(b"SQLite format 3"):
+            remote_path.write_bytes(content)
+            return str(remote_path)
+    except Exception:
+        pass
+    return str(remote_path if remote_path.exists() else settings.db_path)
 
 
 @st.cache_data(ttl=30)
 def read_sql(query: str, params: tuple = ()) -> pd.DataFrame:
-    settings = get_settings()
-    if not settings.db_path.exists():
+    db_path = Path(dashboard_db_path())
+    if not db_path.exists():
         return pd.DataFrame()
-    with sqlite3.connect(settings.db_path) as conn:
+    with sqlite3.connect(db_path) as conn:
         return pd.read_sql_query(query, conn, params=params)
 
 
@@ -47,74 +79,132 @@ def fmt_amount(value) -> str:
     return f"{value:.2f}"
 
 
-def status_zh(value: str) -> str:
-    return STATUS_LABELS.get(value, value)
+def load_home_data() -> dict[str, pd.DataFrame]:
+    return {
+        "latest_monitor": read_sql(
+            """
+            SELECT id, job_name, run_date, started_at, finished_at, status, rows_processed, message
+            FROM job_runs
+            WHERE job_name = 'monitor'
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ),
+        "latest_close": read_sql(
+            """
+            SELECT id, job_name, run_date, started_at, finished_at, status, rows_processed, message
+            FROM job_runs
+            WHERE job_name = 'close_scan'
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ),
+        "active": read_sql(
+            """
+            SELECT cp.id, cp.code, s.name, s.market, cp.pool_date, cp.monitor_until, cp.status
+            FROM candidate_pool cp
+            JOIN stocks s ON s.code = cp.code
+            WHERE cp.status = 'active'
+            ORDER BY cp.pool_date DESC, cp.code
+            """
+        ),
+        "latest_results": read_sql(
+            """
+            SELECT sr.trade_date, sr.code, s.name, sr.volume_ratio_ok, sr.turnover_amount_ok,
+                   sr.fund_flow_3d, sr.fund_flow_ok, sr.final_status,
+                   ds.volume_ratio, ds.turnover_amount
+            FROM strategy_results sr
+            JOIN stocks s ON s.code = sr.code
+            LEFT JOIN daily_snapshots ds
+                ON ds.code = sr.code AND ds.trade_date = sr.trade_date AND ds.captured_at = '14:30'
+            WHERE sr.trade_date = (SELECT MAX(trade_date) FROM strategy_results)
+            ORDER BY sr.final_status DESC, sr.code
+            """
+        ),
+    }
+
+
+def monitor_message(latest_monitor: pd.DataFrame, latest_results: pd.DataFrame) -> tuple[str, str]:
+    if latest_monitor.empty:
+        return "尚未运行", "还没有任何盘中监控任务记录。"
+
+    monitor = latest_monitor.iloc[0]
+    if monitor["status"] != "success":
+        return "监控失败", str(monitor["message"] or "")[:400]
+
+    if latest_results.empty:
+        return "已运行，无结果表", "盘中监控任务成功运行，但没有写入策略结果。"
+
+    warning_count = int(
+        (
+            latest_results["volume_ratio_ok"].eq(1)
+            & latest_results["turnover_amount_ok"].eq(1)
+        ).sum()
+    )
+    passed_count = int((latest_results["final_status"] == "passed").sum())
+    data_date = str(latest_results.iloc[0]["trade_date"])
+
+    if warning_count == 0:
+        return "已运行，未触发预警", f"{data_date} 已监控 {len(latest_results)} 只备选股，但暂无股票同时满足量比和成交额预警条件。"
+    if passed_count == 0:
+        return "已触发预警，未通过资金流", f"{data_date} 有 {warning_count} 只股票满足量比和成交额条件，但暂无股票通过近 3 日主力资金净流入过滤。"
+    return "已出现通过标的", f"{data_date} 有 {passed_count} 只股票通过全部条件。"
 
 
 def home_page() -> None:
     st.title("二连板策略看板")
     init_database_if_needed()
+    if st.button("刷新数据"):
+        st.cache_data.clear()
+        st.rerun()
 
-    latest_job = read_sql(
-        """
-        SELECT job_name, run_date, started_at, finished_at, status, message
-        FROM job_runs
-        ORDER BY started_at DESC
-        LIMIT 1
-        """
-    )
-    active = read_sql(
-        """
-        SELECT cp.id, cp.code, s.name, s.market, cp.pool_date, cp.monitor_until, cp.status
-        FROM candidate_pool cp
-        JOIN stocks s ON s.code = cp.code
-        WHERE cp.status = 'active'
-        ORDER BY cp.pool_date DESC, cp.code
-        """
-    )
-    today_results = read_sql(
-        """
-        SELECT sr.trade_date, sr.code, s.name, sr.volume_ratio_ok, sr.turnover_amount_ok,
-               sr.fund_flow_3d, sr.fund_flow_ok, sr.final_status,
-               ds.volume_ratio, ds.turnover_amount
-        FROM strategy_results sr
-        JOIN stocks s ON s.code = sr.code
-        LEFT JOIN daily_snapshots ds
-            ON ds.code = sr.code AND ds.trade_date = sr.trade_date AND ds.captured_at = '14:30'
-        WHERE sr.trade_date = (SELECT MAX(trade_date) FROM strategy_results)
-        ORDER BY sr.final_status DESC, sr.code
-        """
-    )
+    data = load_home_data()
+    latest_monitor = data["latest_monitor"]
+    latest_close = data["latest_close"]
+    active = data["active"]
+    latest_results = data["latest_results"]
 
-    col1, col2, col3, col4 = st.columns(4)
-    passed_count = int((today_results["final_status"] == "passed").sum()) if not today_results.empty else 0
+    status_title, status_detail = monitor_message(latest_monitor, latest_results)
     warning_count = (
-        int((today_results["volume_ratio_ok"].eq(1) & today_results["turnover_amount_ok"].eq(1)).sum())
-        if not today_results.empty
+        int((latest_results["volume_ratio_ok"].eq(1) & latest_results["turnover_amount_ok"].eq(1)).sum())
+        if not latest_results.empty
         else 0
     )
-    col1.metric("活跃备选", len(active))
-    col2.metric("今日预警", warning_count)
-    col3.metric("今日通过", passed_count)
-    col4.metric("最近任务", latest_job.iloc[0]["status"] if not latest_job.empty else "暂无")
+    passed_count = int((latest_results["final_status"] == "passed").sum()) if not latest_results.empty else 0
 
-    if not latest_job.empty:
-        with st.expander("最近任务日志", expanded=False):
-            st.dataframe(latest_job, use_container_width=True, hide_index=True)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("盘中监控状态", status_title)
+    col2.metric("预警触发", warning_count)
+    col3.metric("最终通过", passed_count)
+    col4.metric("活跃备选", len(active))
 
-    st.subheader("今日策略结果")
-    if today_results.empty:
-        st.info("暂无 14:30 监控结果。运行 `python -m src.jobs monitor` 后会显示。")
+    st.subheader("盘中交易预警")
+    st.info(status_detail)
+    if not latest_monitor.empty:
+        monitor_display = latest_monitor.copy()
+        monitor_display["status"] = monitor_display["status"].map(status_zh)
+        st.dataframe(monitor_display, use_container_width=True, hide_index=True)
+
+    if latest_results.empty:
+        st.info("暂无策略结果。盘中监控任务运行后会显示。")
     else:
-        display = today_results.copy()
-        display["final_status"] = display["final_status"].map(status_zh)
-        display["turnover_amount"] = display["turnover_amount"].map(fmt_amount)
-        display["fund_flow_3d"] = display["fund_flow_3d"].map(fmt_amount)
-        st.dataframe(display, use_container_width=True, hide_index=True)
+        result_display = latest_results.copy()
+        result_display["final_status"] = result_display["final_status"].map(status_zh)
+        result_display["turnover_amount"] = result_display["turnover_amount"].map(fmt_amount)
+        result_display["fund_flow_3d"] = result_display["fund_flow_3d"].map(fmt_amount)
+        st.dataframe(result_display, use_container_width=True, hide_index=True)
+
+    st.subheader("备选池更新")
+    if latest_close.empty:
+        st.info("暂无收盘后备选池更新任务记录。")
+    else:
+        close_display = latest_close.copy()
+        close_display["status"] = close_display["status"].map(status_zh)
+        st.dataframe(close_display, use_container_width=True, hide_index=True)
 
     st.subheader("当前备选池")
     if active.empty:
-        st.info("暂无活跃备选。收盘后运行 `python -m src.jobs close-scan` 可加入股票。")
+        st.info("暂无活跃备选。收盘后更新任务成功后会加入股票。")
     else:
         active_display = active.copy()
         active_display["status"] = active_display["status"].map(status_zh)
@@ -246,7 +336,7 @@ def config_page() -> None:
     st.title("配置与任务")
     settings = get_settings()
     col1, col2 = st.columns(2)
-    col1.metric("数据库", str(settings.db_path))
+    col1.metric("数据库", str(dashboard_db_path()))
     col2.metric("SMTP", "已配置" if settings.smtp_host and settings.smtp_to else "未完整配置")
 
     st.subheader("任务日志")
@@ -261,6 +351,7 @@ def config_page() -> None:
     if logs.empty:
         st.info("暂无任务日志。")
     else:
+        logs["status"] = logs["status"].map(status_zh)
         st.dataframe(logs, use_container_width=True, hide_index=True)
 
     st.subheader("邮件日志")
@@ -292,4 +383,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

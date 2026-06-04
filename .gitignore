@@ -4,6 +4,7 @@ stock_strategy.sqlite3
 __pycache__/
 .pytest_cache/
 .streamlit/
+.cache/
 *.log
 wencai_*_debug.png
 *.pyc
