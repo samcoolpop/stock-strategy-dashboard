@@ -9,10 +9,9 @@
 
 ## 安装
 
-```powershell
-pip install -r requirements.txt
-playwright install chromium
-Copy-Item .env.example .env
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 编辑 `.env`，填写 SMTP 配置。默认 `APP_DATA_SOURCE=akshare`，不需要 token。
@@ -21,14 +20,14 @@ Copy-Item .env.example .env
 
 ## 初始化数据库
 
-```powershell
-python -m src.jobs init-db
+```bash
+.venv/bin/python -m src.jobs init-db
 ```
 
 ## 启动看板
 
-```powershell
-streamlit run app.py
+```bash
+.venv/bin/streamlit run app.py
 ```
 
 默认访问：`http://localhost:8501`
@@ -37,30 +36,36 @@ streamlit run app.py
 
 收盘后入池：
 
-```powershell
-python -m src.jobs close-scan
+```bash
+.venv/bin/python -m src.jobs close-scan
 ```
 
 14:30 监控：
 
-```powershell
-python -m src.jobs monitor
+```bash
+.venv/bin/python -m src.jobs monitor
 ```
 
 发送测试邮件：
 
-```powershell
-python -m src.jobs test-email
+```bash
+.venv/bin/python -m src.jobs test-email
 ```
 
-## Windows 任务计划建议
+## macOS 定时任务
 
-创建两个任务：
+这台 Mac 可以用 `launchd` 定时运行任务。执行一次安装脚本：
 
-- 周一至周五 14:30：运行 `python -m src.jobs monitor`
-- 周一至周五 15:30 或 16:00：运行 `python -m src.jobs close-scan`
+```bash
+./scripts/install_macos_launchd.sh
+```
 
-任务工作目录设置为本项目目录。
+安装后会创建两个用户定时任务：
+
+- 周一至周五 14:10、14:15、14:20：运行 `scripts/run_monitor_and_push.sh`
+- 周一至周五 15:40：运行 `scripts/run_close_scan_and_push.sh`
+
+脚本会先运行对应任务，再把 `stock_strategy.sqlite3` 提交并推送到 GitHub。这台 Mac 需要提前配置好 GitHub push 权限。当前安装脚本会把 `launchd` 配置放在项目目录的 `launchd/` 下；如果 Mac 重启，重新执行一次 `./scripts/install_macos_launchd.sh` 即可恢复定时任务。
 
 ## 云端同步
 

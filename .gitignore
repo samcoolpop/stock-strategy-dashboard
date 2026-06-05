@@ -1,5 +1,8 @@
 .env
+.venv/
 .wencai_browser/
+launchd/
+logs/
 stock_strategy.sqlite3
 __pycache__/
 .pytest_cache/
