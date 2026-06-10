@@ -1,8 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import pandas as pd
 import streamlit as st
@@ -43,7 +44,13 @@ def dashboard_db_path() -> str:
     cache_dir.mkdir(exist_ok=True)
     remote_path = cache_dir / "dashboard_stock_strategy.sqlite3"
     try:
-        with urlopen(remote_db_url, timeout=15) as response:
+        separator = "&" if "?" in remote_db_url else "?"
+        download_url = f"{remote_db_url}{separator}v={int(time.time() // 30)}"
+        request = Request(
+            download_url,
+            headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
+        )
+        with urlopen(request, timeout=15) as response:
             content = response.read()
         if content.startswith(b"SQLite format 3"):
             remote_path.write_bytes(content)
@@ -190,7 +197,7 @@ def home_page() -> None:
     if not latest_monitor.empty:
         monitor_display = latest_monitor.copy()
         monitor_display["status"] = monitor_display["status"].map(status_zh)
-        st.dataframe(monitor_display, use_container_width=True, hide_index=True)
+        st.dataframe(monitor_display, width="stretch", hide_index=True)
 
     if latest_results.empty:
         st.info("暂无策略结果。盘中监控任务运行后会显示。")
@@ -199,7 +206,7 @@ def home_page() -> None:
         result_display["final_status"] = result_display["final_status"].map(status_zh)
         result_display["turnover_amount"] = result_display["turnover_amount"].map(fmt_amount)
         result_display["fund_flow_3d"] = result_display["fund_flow_3d"].map(fmt_amount)
-        st.dataframe(result_display, use_container_width=True, hide_index=True)
+        st.dataframe(result_display, width="stretch", hide_index=True)
 
     st.subheader("备选池更新")
     if latest_close.empty:
@@ -207,7 +214,7 @@ def home_page() -> None:
     else:
         close_display = latest_close.copy()
         close_display["status"] = close_display["status"].map(status_zh)
-        st.dataframe(close_display, use_container_width=True, hide_index=True)
+        st.dataframe(close_display, width="stretch", hide_index=True)
 
     st.subheader("当前备选池")
     if active.empty:
@@ -215,7 +222,7 @@ def home_page() -> None:
     else:
         active_display = active.copy()
         active_display["status"] = active_display["status"].map(status_zh)
-        st.dataframe(active_display, use_container_width=True, hide_index=True)
+        st.dataframe(active_display, width="stretch", hide_index=True)
 
 
 def history_page() -> None:
@@ -261,7 +268,7 @@ def history_page() -> None:
         df["turnover_amount"] = df["turnover_amount"].map(fmt_amount)
         df["fund_flow_3d"] = df["fund_flow_3d"].map(fmt_amount)
         df["final_status"] = df["final_status"].map(status_zh)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width="stretch", hide_index=True)
 
 
 def stock_detail_page() -> None:
@@ -316,7 +323,7 @@ def stock_detail_page() -> None:
     st.subheader("入池记录")
     pool_display = pool.copy()
     pool_display["status"] = pool_display["status"].map(status_zh)
-    st.dataframe(pool_display, use_container_width=True, hide_index=True)
+    st.dataframe(pool_display, width="stretch", hide_index=True)
 
     st.subheader("14:30 快照")
     if snapshots.empty:
@@ -326,7 +333,7 @@ def stock_detail_page() -> None:
         display["turnover_amount"] = display["turnover_amount"].map(fmt_amount)
         display["fund_flow_3d"] = display["fund_flow_3d"].map(fmt_amount)
         display["final_status"] = display["final_status"].map(status_zh)
-        st.dataframe(display, use_container_width=True, hide_index=True)
+        st.dataframe(display, width="stretch", hide_index=True)
 
     st.subheader("主力资金流")
     if flows.empty:
@@ -336,7 +343,7 @@ def stock_detail_page() -> None:
         st.bar_chart(chart_df["main_net_inflow"])
         flows_display = flows.copy()
         flows_display["main_net_inflow"] = flows_display["main_net_inflow"].map(fmt_amount)
-        st.dataframe(flows_display, use_container_width=True, hide_index=True)
+        st.dataframe(flows_display, width="stretch", hide_index=True)
 
 
 def config_page() -> None:
@@ -359,7 +366,7 @@ def config_page() -> None:
         st.info("暂无任务日志。")
     else:
         logs["status"] = logs["status"].map(status_zh)
-        st.dataframe(logs, use_container_width=True, hide_index=True)
+        st.dataframe(logs, width="stretch", hide_index=True)
 
     st.subheader("邮件日志")
     emails = read_sql(
@@ -373,7 +380,7 @@ def config_page() -> None:
     if emails.empty:
         st.info("暂无邮件发送记录。")
     else:
-        st.dataframe(emails, use_container_width=True, hide_index=True)
+        st.dataframe(emails, width="stretch", hide_index=True)
 
 
 def main() -> None:
