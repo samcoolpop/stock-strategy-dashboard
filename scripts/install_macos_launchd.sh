@@ -2,20 +2,19 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LAUNCHD_DIR="$PROJECT_ROOT/launchd"
+LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 UID_VALUE="$(id -u)"
 
 MONITOR_LABEL="com.sam.stock-strategy.monitor"
 CLOSE_SCAN_LABEL="com.sam.stock-strategy.close-scan"
-MONITOR_PLIST="$LAUNCHD_DIR/$MONITOR_LABEL.plist"
-CLOSE_SCAN_PLIST="$LAUNCHD_DIR/$CLOSE_SCAN_LABEL.plist"
+MONITOR_PLIST="$LAUNCH_AGENTS_DIR/$MONITOR_LABEL.plist"
+CLOSE_SCAN_PLIST="$LAUNCH_AGENTS_DIR/$CLOSE_SCAN_LABEL.plist"
 
 cd "$PROJECT_ROOT"
 
-mkdir -p "$LAUNCHD_DIR" logs
+mkdir -p "$LAUNCH_AGENTS_DIR" logs
 python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install --disable-pip-version-check -r requirements.txt
 .venv/bin/python -m src.jobs init-db
 
 chmod +x scripts/run_monitor_and_push.sh scripts/run_close_scan_and_push.sh

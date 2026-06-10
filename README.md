@@ -65,15 +65,13 @@ python3 -m venv .venv
 - 周一至周五 14:10、14:15、14:20：运行 `scripts/run_monitor_and_push.sh`
 - 周一至周五 15:40：运行 `scripts/run_close_scan_and_push.sh`
 
-脚本会先运行对应任务，再把 `stock_strategy.sqlite3` 提交并推送到 GitHub。这台 Mac 需要提前配置好 GitHub push 权限。当前安装脚本会把 `launchd` 配置放在项目目录的 `launchd/` 下；如果 Mac 重启，重新执行一次 `./scripts/install_macos_launchd.sh` 即可恢复定时任务。
+脚本会先运行对应任务，再把 `stock_strategy.sqlite3` 提交并推送到 GitHub。这台 Mac 需要提前配置好 GitHub push 权限。安装脚本会把 `launchd` 配置写入 `~/Library/LaunchAgents/`，登录后会自动按时运行。
 
 ## 云端同步
 
-仓库包含 GitHub Actions 工作流 `.github/workflows/sync-data.yml`：
+仓库保留 GitHub Actions 工作流 `.github/workflows/sync-data.yml` 作为手动备用入口。自动定时抓数由这台 Mac 的 `launchd` 负责。
 
-- 北京时间 14:10、14:15、14:20 冗余运行 `python -m src.jobs monitor`
-- 北京时间 15:40 运行 `python -m src.jobs close-scan`
-- 任务完成后把 `stock_strategy.sqlite3` 提交回仓库
+任务完成后，脚本会把 `stock_strategy.sqlite3` 提交回仓库。
 
 Streamlit Cloud 会从仓库读取数据库文件。首次部署或手动刷新后，小伙伴访问公网地址即可看到最新已同步的数据。
 
