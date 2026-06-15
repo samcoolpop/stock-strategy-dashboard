@@ -5,7 +5,9 @@ from decimal import Decimal
 
 
 MIN_TURNOVER_AMOUNT = Decimal("500000000")
-MAX_VOLUME_RATIO = Decimal("0.7")
+MAX_VOLUME_RATIO = Decimal("0.8")
+MIN_TWO_DAY_GAIN = Decimal("0.15")
+MIN_THREE_DAY_GAIN = Decimal("0.20")
 
 
 @dataclass(frozen=True)
@@ -17,10 +19,12 @@ class StockCandidate:
     is_star: bool = False
     is_chinext: bool = False
     is_one_word_board: bool = False
+    gain_2d: Decimal | None = None
+    gain_3d: Decimal | None = None
 
     @property
     def eligible_for_pool(self) -> bool:
-        return not self.is_st and not self.is_star
+        return not self.is_st and not self.is_star and not is_bj_market(self.code, self.market)
 
     def to_record(self) -> dict[str, object]:
         return {
@@ -60,16 +64,16 @@ class StrategyDecision:
 def evaluate_snapshot(
     volume_ratio: Decimal | None,
     turnover_amount: Decimal | None,
-    fund_flow_3d: Decimal,
+    intraday_fund_flow: Decimal,
 ) -> StrategyDecision:
-    volume_ratio_ok = volume_ratio is not None and volume_ratio <= MAX_VOLUME_RATIO
+    volume_ratio_ok = volume_ratio is not None and volume_ratio < MAX_VOLUME_RATIO
     turnover_amount_ok = turnover_amount is not None and turnover_amount >= MIN_TURNOVER_AMOUNT
-    fund_flow_ok = fund_flow_3d > 0
+    fund_flow_ok = intraday_fund_flow > 0
     final_status = "passed" if volume_ratio_ok and turnover_amount_ok and fund_flow_ok else "watching"
     return StrategyDecision(
         volume_ratio_ok=volume_ratio_ok,
         turnover_amount_ok=turnover_amount_ok,
-        fund_flow_3d=fund_flow_3d,
+        fund_flow_3d=intraday_fund_flow,
         fund_flow_ok=fund_flow_ok,
         final_status=final_status,
     )
@@ -98,3 +102,6 @@ def is_star_market(code: str, market: str | None) -> bool:
 def is_chinext_market(code: str, market: str | None) -> bool:
     return code.startswith(("300", "301")) or ("创业" in (market or ""))
 
+
+def is_bj_market(code: str, market: str | None) -> bool:
+    return code.startswith(("4", "8", "9")) or ("北交" in (market or ""))
