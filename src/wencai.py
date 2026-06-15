@@ -38,9 +38,9 @@ class WencaiClient:
     """
 
     BASE_URL = "https://www.iwencai.com/unifiedwap/result?w={query}"
-    TWO_LIMIT_QUERY = "今日二连板，非ST，非科创板，股票代码，股票简称，所属板块，是否一字板"
+    TWO_LIMIT_QUERY = "近2个交易日涨幅大于等于15%或近3个交易日涨幅大于等于20%，非ST，非科创板，非北交所，股票代码，股票简称，所属板块"
     MONITOR_QUERY = "{codes} 量比 成交额 主力资金净流入 股票简称 所属板块"
-    FUND_FLOW_QUERY = "{code} 最近3个交易日主力资金净流入"
+    FUND_FLOW_QUERY = "{code} 今日主力资金净流入"
 
     CODE_ALIASES = ("股票代码", "代码", "code")
     NAME_ALIASES = ("股票简称", "股票名称", "简称", "名称", "name")
@@ -76,6 +76,9 @@ class WencaiClient:
             if candidate.eligible_for_pool:
                 candidates.append(candidate)
         return candidates
+
+    def fetch_momentum_candidates(self, run_date: date | None = None) -> list[StockCandidate]:
+        return self.fetch_two_limit_up()
 
     def fetch_monitor_snapshots(self, codes: list[str]) -> list[MonitorSnapshot]:
         if not codes:
@@ -116,6 +119,16 @@ class WencaiClient:
                 )
             )
         return flows
+
+    def fetch_intraday_fund_flows(self, codes: list[str], run_date: date) -> dict[str, FundFlow]:
+        result: dict[str, FundFlow] = {}
+        for code in codes:
+            flows = self.fetch_recent_fund_flows(code, run_date)
+            for flow in flows:
+                if flow.trade_date == run_date.isoformat():
+                    result[flow.code] = flow
+                    break
+        return result
 
     def _query_rows(self, query: str) -> list[dict[str, Any]]:
         try:
@@ -204,4 +217,3 @@ _EXTRACT_TABLE_JS = r"""
   return [];
 }
 """
-
