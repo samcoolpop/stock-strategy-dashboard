@@ -1,17 +1,18 @@
 # 本地股票策略看板
 
-本项目实现一个本地运行的二连板策略看板：
+本项目实现一个本地运行的短线强势股预警看板：
 
-- 默认使用 AkShare 接口，收盘后确认二连板股票并加入备选池。
-- 每个交易日 14:30 监控备选池股票的量比、成交额和近 3 日主力资金流。
+- 默认使用 AkShare 接口，收盘后按 2/3 日累计收盘涨幅确认股票并加入备选池。
+- 每个交易日 14:30 监控备选池股票的量比、成交额和当日主力资金流。
 - 满足策略条件后写入 SQLite，并通过邮件提醒。
 - Streamlit 网页展示今日结果、历史记录、个股详情和任务日志。
 
 ## 安装
 
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
+```powershell
+pip install -r requirements.txt
+playwright install chromium
+Copy-Item .env.example .env
 ```
 
 编辑 `.env`，填写 SMTP 配置。默认 `APP_DATA_SOURCE=akshare`，不需要 token。
@@ -20,14 +21,14 @@ python3 -m venv .venv
 
 ## 初始化数据库
 
-```bash
-.venv/bin/python -m src.jobs init-db
+```powershell
+python -m src.jobs init-db
 ```
 
 ## 启动看板
 
-```bash
-.venv/bin/streamlit run app.py
+```powershell
+streamlit run app.py
 ```
 
 默认访问：`http://localhost:8501`
@@ -36,51 +37,67 @@ python3 -m venv .venv
 
 收盘后入池：
 
-```bash
-.venv/bin/python -m src.jobs close-scan
+```powershell
+python -m src.jobs close-scan
 ```
 
 14:30 监控：
 
-```bash
-.venv/bin/python -m src.jobs monitor
+```powershell
+python -m src.jobs monitor
 ```
 
 发送测试邮件：
 
-```bash
-.venv/bin/python -m src.jobs test-email
+```powershell
+python -m src.jobs test-email
 ```
 
-## macOS 定时任务
+## Windows 任务计划建议
 
-这台 Mac 可以用 `launchd` 定时运行任务。执行一次安装脚本：
+创建两个任务：
 
-```bash
-./scripts/install_macos_launchd.sh
-```
+- 周一至周五 14:30：运行 `python -m src.jobs monitor`
+- 周一至周五 15:30 或 16:00：运行 `python -m src.jobs close-scan`
 
-安装后会创建两个用户定时任务：
-
-- 周一至周五 14:10、14:15、14:20：运行 `scripts/run_monitor_and_push.sh`
-- 周一至周五 15:40：运行 `scripts/run_close_scan_and_push.sh`
-
-脚本会先运行对应任务，再把 `stock_strategy.sqlite3` 提交并推送到 GitHub。这台 Mac 需要提前配置好 GitHub push 权限。安装脚本会把 `launchd` 配置写入 `~/Library/LaunchAgents/`，登录后会自动按时运行。
+任务工作目录设置为本项目目录。
 
 ## 云端同步
 
-仓库保留 GitHub Actions 工作流 `.github/workflows/sync-data.yml` 作为手动备用入口。自动定时抓数由这台 Mac 的 `launchd` 负责。
+仓库包含 GitHub Actions 工作流 `.github/workflows/sync-data.yml`：
 
-任务完成后，脚本会把 `stock_strategy.sqlite3` 提交回仓库。
+- 北京时间 14:10、14:15、14:20 冗余运行 `python -m src.jobs monitor`
+- 北京时间 15:40 运行 `python -m src.jobs close-scan`
+- 任务完成后把 `stock_strategy.sqlite3` 提交回仓库
 
 Streamlit Cloud 会从仓库读取数据库文件。首次部署或手动刷新后，小伙伴访问公网地址即可看到最新已同步的数据。
 
+### 网页手动补跑
+
+“配置与任务”页支持手动触发 GitHub Actions。朋友发现数据没有刷新时，可以输入操作密码并点击按钮补跑：
+
+- `盘中监控`：触发 `python -m src.jobs monitor`
+- `收盘入池`：触发 `python -m src.jobs close-scan`
+- `两项都跑`：两个任务都执行
+
+需要在 Streamlit Cloud 的 Secrets 中配置：
+
+```toml
+ADMIN_PIN = "一个只告诉可信使用者的操作密码"
+GITHUB_ACTIONS_TOKEN = "可触发 workflow_dispatch 的 GitHub token"
+GITHUB_OWNER = "samcoolpop"
+GITHUB_REPO = "stock-strategy-dashboard"
+GITHUB_WORKFLOW = "sync-data.yml"
+GITHUB_BRANCH = "main"
+```
+
+`GITHUB_ACTIONS_TOKEN` 建议使用 fine-grained token，仅授权 `stock-strategy-dashboard` 仓库，并授予 Actions 读写权限。不要把 token 写进代码或提交到仓库。
+
 ## 策略规则
 
-- 二连板入池，收盘后确认。
-- 一字板、创业板保留。
-- ST、科创板剔除。
+- 收盘后入池，按收盘价计算：近 2 个交易日累计涨幅 `>= 15%`，或近 3 个交易日累计涨幅 `>= 20%`。
+- ST、科创板、北交所剔除。
 - 入池后监控 10 个交易日。
-- 14:30 量比 `<= 0.7`。
+- 14:30 量比 `< 0.8`。
 - 当日成交额 `>= 5亿元`。
-- 最近 3 个交易日主力资金净流入合计 `> 0`。
+- 14:30 当日主力资金净流入 `> 0`。
