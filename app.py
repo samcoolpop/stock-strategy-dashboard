@@ -89,6 +89,57 @@ def trigger_github_workflow(job: str) -> tuple[bool, str]:
         return False, f"触发失败：{exc}"
 
 
+def github_api_get(path: str) -> tuple[bool, dict | None, str]:
+    token = config_value("GITHUB_ACTIONS_TOKEN")
+    owner = config_value("GITHUB_OWNER", GITHUB_OWNER)
+    repo = config_value("GITHUB_REPO", GITHUB_REPO)
+    url = f"https://api.github.com/repos/{owner}/{repo}{path}"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "stock-strategy-dashboard",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = Request(url, headers=headers)
+    try:
+        with urlopen(request, timeout=20) as response:
+            return True, json.loads(response.read().decode("utf-8")), ""
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")[:500]
+        return False, None, f"GitHub API 请求失败：HTTP {exc.code} {detail}"
+    except Exception as exc:
+        return False, None, f"读取 GitHub Actions 状态失败：{exc}"
+
+
+@st.cache_data(ttl=15)
+def workflow_runs() -> tuple[list[dict], str]:
+    workflow = config_value("GITHUB_WORKFLOW", GITHUB_WORKFLOW)
+    ok, data, error = github_api_get(f"/actions/workflows/{workflow}/runs?per_page=5")
+    if not ok or data is None:
+        return [], error
+    return list(data.get("workflow_runs", [])), ""
+
+
+def workflow_state() -> tuple[bool, str, list[dict]]:
+    runs, error = workflow_runs()
+    if error:
+        return False, error, []
+    busy_statuses = {"queued", "in_progress", "pending", "waiting", "requested"}
+    busy = any(run.get("status") in busy_statuses for run in runs)
+    return busy, "", runs
+
+
+def run_status_zh(run: dict) -> str:
+    status = run.get("status")
+    conclusion = run.get("conclusion")
+    if status != "completed":
+        return {"queued": "排队中", "in_progress": "运行中", "pending": "等待中"}.get(status, str(status or "未知"))
+    return {"success": "成功", "failure": "失败", "cancelled": "已取消", "skipped": "跳过"}.get(
+        conclusion, str(conclusion or "完成")
+    )
+
+
 @st.cache_data(ttl=30)
 def dashboard_db_path() -> str:
     settings = get_settings()
@@ -414,6 +465,35 @@ def config_page() -> None:
     st.subheader("手动补跑任务")
     admin_pin = config_value("ADMIN_PIN")
     token_ready = bool(config_value("GITHUB_ACTIONS_TOKEN"))
+    workflow_busy, workflow_error, runs = workflow_state()
+
+    if workflow_error:
+        st.warning(workflow_error)
+    elif runs:
+        latest = runs[0]
+        latest_url = latest.get("html_url", "")
+        status_text = run_status_zh(latest)
+        if workflow_busy:
+            st.info(f"GitHub Actions 正在运行：#{latest.get('run_number')} {status_text}。请等待完成后再触发新的任务。")
+        else:
+            st.info(f"最近一次 GitHub Actions：#{latest.get('run_number')} {status_text}。")
+        if latest_url:
+            st.link_button("查看 GitHub 运行进度", latest_url)
+
+        rows = []
+        for run in runs:
+            rows.append(
+                {
+                    "编号": run.get("run_number"),
+                    "触发方式": run.get("event"),
+                    "状态": run_status_zh(run),
+                    "创建时间": run.get("created_at"),
+                    "更新时间": run.get("updated_at"),
+                    "链接": run.get("html_url"),
+                }
+            )
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
     if not admin_pin:
         st.warning("尚未配置 ADMIN_PIN，手动补跑按钮不可用。")
     elif not token_ready:
@@ -426,16 +506,17 @@ def config_page() -> None:
                 ["盘中监控", "收盘入池", "两项都跑"],
                 horizontal=True,
             )
-            submitted = st.form_submit_button("触发抓数并同步网页")
+            submitted = st.form_submit_button("触发抓数并同步网页", disabled=workflow_busy)
         if submitted:
             if not hmac.compare_digest(pin, admin_pin):
                 st.error("操作密码不正确。")
             else:
                 job_map = {"盘中监控": "monitor", "收盘入池": "close-scan", "两项都跑": "both"}
                 ok, message = trigger_github_workflow(job_map[job_label])
+                st.cache_data.clear()
                 if ok:
                     st.success(message)
-                    st.info("GitHub Actions 跑完并提交数据库后，回到首页点“刷新数据”即可看到新结果。")
+                    st.info("任务已发起。稍等几十秒后刷新本页查看进度；GitHub Actions 跑完并提交数据库后，回到首页点“刷新数据”即可看到新结果。")
                 else:
                     st.error(message)
 
