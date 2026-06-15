@@ -17,7 +17,7 @@ on:
     - cron: "10 6 * * 1-5"
     - cron: "15 6 * * 1-5"
     - cron: "20 6 * * 1-5"
-    # Beijing 15:40. Add newly confirmed two-limit-up candidates after close.
+    # Beijing 15:40. Add newly confirmed momentum candidates after close.
     - cron: "40 7 * * 1-5"
 
 permissions:
@@ -54,7 +54,7 @@ jobs:
       - name: Run scheduled task
         shell: bash
         run: |
-          set -e
+          set +e
           INPUT_JOB="${{ github.event.inputs.job }}"
           EVENT_SCHEDULE="${{ github.event.schedule }}"
           if [ -z "$INPUT_JOB" ]; then
@@ -67,14 +67,30 @@ jobs:
             fi
           fi
 
+          FAILED=0
           if [ "$INPUT_JOB" = "monitor" ] || [ "$INPUT_JOB" = "both" ]; then
             python -m src.jobs monitor
+            STATUS=$?
+            if [ "$STATUS" -ne 0 ]; then
+              echo "monitor failed with status $STATUS"
+              FAILED=1
+            fi
           fi
           if [ "$INPUT_JOB" = "close-scan" ] || [ "$INPUT_JOB" = "both" ]; then
             python -m src.jobs close-scan
+            STATUS=$?
+            if [ "$STATUS" -ne 0 ]; then
+              echo "close-scan failed with status $STATUS"
+              FAILED=1
+            fi
+          fi
+
+          if [ "$FAILED" -ne 0 ]; then
+            echo "TASK_FAILED=1" >> "$GITHUB_ENV"
           fi
 
       - name: Commit updated database
+        if: always()
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
@@ -84,5 +100,13 @@ jobs:
             echo "No database changes to commit."
           else
             git commit -m "Update stock strategy data"
+            git pull --rebase origin main
             git push
           fi
+
+      - name: Fail if any task failed
+        if: env.TASK_FAILED == '1'
+        shell: bash
+        run: |
+          echo "At least one data task failed. Database/log changes were still committed when possible."
+          exit 1
