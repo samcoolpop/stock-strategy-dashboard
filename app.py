@@ -1,8 +1,12 @@
 ﻿from __future__ import annotations
 
+import hmac
+import json
+import os
 import sqlite3
 import time
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pandas as pd
@@ -12,7 +16,13 @@ from src.config import ROOT_DIR, get_settings
 from src.db import Database
 
 
-st.set_page_config(page_title="二连板策略看板", page_icon="chart_with_upwards_trend", layout="wide")
+st.set_page_config(page_title="短线强势股预警看板", page_icon="chart_with_upwards_trend", layout="wide")
+
+
+GITHUB_OWNER = "samcoolpop"
+GITHUB_REPO = "stock-strategy-dashboard"
+GITHUB_WORKFLOW = "sync-data.yml"
+GITHUB_BRANCH = "main"
 
 
 STATUS_LABELS = {
@@ -31,6 +41,52 @@ def status_zh(value: str | None) -> str:
     if value is None:
         return ""
     return STATUS_LABELS.get(value, value)
+
+
+def config_value(name: str, default: str = "") -> str:
+    try:
+        value = st.secrets.get(name, None)
+        if value is not None:
+            return str(value).strip()
+    except Exception:
+        pass
+    return os.getenv(name, default).strip()
+
+
+def trigger_github_workflow(job: str) -> tuple[bool, str]:
+    token = config_value("GITHUB_ACTIONS_TOKEN")
+    if not token:
+        return False, "缺少 GITHUB_ACTIONS_TOKEN，无法触发 GitHub Actions。"
+
+    owner = config_value("GITHUB_OWNER", GITHUB_OWNER)
+    repo = config_value("GITHUB_REPO", GITHUB_REPO)
+    workflow = config_value("GITHUB_WORKFLOW", GITHUB_WORKFLOW)
+    branch = config_value("GITHUB_BRANCH", GITHUB_BRANCH)
+    url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
+    payload = json.dumps({"ref": branch, "inputs": {"job": job}}).encode("utf-8")
+    request = Request(
+        url,
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+            "User-Agent": "stock-strategy-dashboard",
+        },
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            if response.status == 204:
+                actions_url = f"https://github.com/{owner}/{repo}/actions/workflows/{workflow}"
+                return True, f"已触发任务，稍后可在 {actions_url} 查看运行状态。"
+            return False, f"GitHub 返回异常状态：{response.status}"
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")[:500]
+        return False, f"GitHub API 请求失败：HTTP {exc.code} {detail}"
+    except Exception as exc:
+        return False, f"触发失败：{exc}"
 
 
 @st.cache_data(ttl=30)
@@ -158,12 +214,12 @@ def monitor_message(latest_monitor: pd.DataFrame, latest_results: pd.DataFrame) 
     if warning_count == 0:
         return "已运行，未触发预警", f"{data_date} 已监控 {len(latest_results)} 只备选股，但暂无股票同时满足量比和成交额预警条件。"
     if passed_count == 0:
-        return "已触发预警，未通过资金流", f"{data_date} 有 {warning_count} 只股票满足量比和成交额条件，但暂无股票通过近 3 日主力资金净流入过滤。"
+        return "已触发预警，未通过资金流", f"{data_date} 有 {warning_count} 只股票满足量比和成交额条件，但暂无股票通过当日主力资金净流入过滤。"
     return "已出现通过标的", f"{data_date} 有 {passed_count} 只股票通过全部条件。"
 
 
 def home_page() -> None:
-    st.title("二连板策略看板")
+    st.title("短线强势股预警看板")
     init_database_if_needed()
     if st.button("刷新数据"):
         st.cache_data.clear()
@@ -206,6 +262,7 @@ def home_page() -> None:
         result_display["final_status"] = result_display["final_status"].map(status_zh)
         result_display["turnover_amount"] = result_display["turnover_amount"].map(fmt_amount)
         result_display["fund_flow_3d"] = result_display["fund_flow_3d"].map(fmt_amount)
+        result_display = result_display.rename(columns={"fund_flow_3d": "intraday_fund_flow"})
         st.dataframe(result_display, width="stretch", hide_index=True)
 
     st.subheader("备选池更新")
@@ -218,7 +275,7 @@ def home_page() -> None:
 
     st.subheader("当前备选池")
     if active.empty:
-        st.info("暂无活跃备选。收盘后更新任务成功后会加入股票。")
+        st.info("暂无活跃备选。收盘后涨幅入池任务成功后会加入股票。")
     else:
         active_display = active.copy()
         active_display["status"] = active_display["status"].map(status_zh)
@@ -333,9 +390,10 @@ def stock_detail_page() -> None:
         display["turnover_amount"] = display["turnover_amount"].map(fmt_amount)
         display["fund_flow_3d"] = display["fund_flow_3d"].map(fmt_amount)
         display["final_status"] = display["final_status"].map(status_zh)
+        display = display.rename(columns={"fund_flow_3d": "intraday_fund_flow"})
         st.dataframe(display, width="stretch", hide_index=True)
 
-    st.subheader("主力资金流")
+    st.subheader("当日主力资金流")
     if flows.empty:
         st.info("暂无资金流记录。")
     else:
@@ -352,6 +410,34 @@ def config_page() -> None:
     col1, col2 = st.columns(2)
     col1.metric("数据库", str(dashboard_db_path()))
     col2.metric("SMTP", "已配置" if settings.smtp_host and settings.smtp_to else "未完整配置")
+
+    st.subheader("手动补跑任务")
+    admin_pin = config_value("ADMIN_PIN")
+    token_ready = bool(config_value("GITHUB_ACTIONS_TOKEN"))
+    if not admin_pin:
+        st.warning("尚未配置 ADMIN_PIN，手动补跑按钮不可用。")
+    elif not token_ready:
+        st.warning("尚未配置 GITHUB_ACTIONS_TOKEN，手动补跑按钮不可用。")
+    else:
+        with st.form("manual_workflow_dispatch"):
+            pin = st.text_input("操作密码", type="password")
+            job_label = st.radio(
+                "要执行的任务",
+                ["盘中监控", "收盘入池", "两项都跑"],
+                horizontal=True,
+            )
+            submitted = st.form_submit_button("触发抓数并同步网页")
+        if submitted:
+            if not hmac.compare_digest(pin, admin_pin):
+                st.error("操作密码不正确。")
+            else:
+                job_map = {"盘中监控": "monitor", "收盘入池": "close-scan", "两项都跑": "both"}
+                ok, message = trigger_github_workflow(job_map[job_label])
+                if ok:
+                    st.success(message)
+                    st.info("GitHub Actions 跑完并提交数据库后，回到首页点“刷新数据”即可看到新结果。")
+                else:
+                    st.error(message)
 
     st.subheader("任务日志")
     logs = read_sql(
