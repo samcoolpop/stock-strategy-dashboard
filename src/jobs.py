@@ -38,8 +38,8 @@ def close_scan(run_date: date) -> int:
 
     try:
         client = make_data_client(settings)
-        if isinstance(client, AkShareClient):
-            candidates = client.fetch_two_limit_up(run_date)
+        if hasattr(client, "fetch_momentum_candidates"):
+            candidates = client.fetch_momentum_candidates(run_date)
         else:
             candidates = client.fetch_two_limit_up()
         inserted = 0
@@ -72,6 +72,7 @@ def monitor(run_date: date) -> int:
         client = make_data_client(settings)
         codes = [row["code"] for row in candidates]
         snapshots = {item.code: item for item in client.fetch_monitor_snapshots(codes)}
+        intraday_flows = client.fetch_intraday_fund_flows(codes, run_date) if hasattr(client, "fetch_intraday_fund_flows") else {}
         passed_results: list[dict[str, object]] = []
 
         for candidate in candidates:
@@ -93,7 +94,9 @@ def monitor(run_date: date) -> int:
                 }
             )
 
-            for flow in client.fetch_recent_fund_flows(code, run_date):
+            flow = intraday_flows.get(code)
+            intraday_fund_flow = flow.main_net_inflow if flow is not None else Decimal("0")
+            if flow is not None:
                 repo.insert_fund_flow(
                     {
                         "code": code,
@@ -103,8 +106,7 @@ def monitor(run_date: date) -> int:
                     }
                 )
 
-            fund_flow_3d = Decimal(str(repo.recent_fund_sum(code, run_date.isoformat(), 3)))
-            decision = evaluate_snapshot(snapshot.volume_ratio, snapshot.turnover_amount, fund_flow_3d)
+            decision = evaluate_snapshot(snapshot.volume_ratio, snapshot.turnover_amount, intraday_fund_flow)
             repo.upsert_strategy_result(
                 {
                     "code": code,
@@ -125,7 +127,7 @@ def monitor(run_date: date) -> int:
                         "name": candidate["name"],
                         "volume_ratio": snapshot.volume_ratio,
                         "turnover_amount": snapshot.turnover_amount,
-                        "fund_flow_3d": decision.fund_flow_3d,
+                        "intraday_fund_flow": decision.fund_flow_3d,
                     }
                 )
 
@@ -151,12 +153,12 @@ def send_strategy_email(
     if not passed_results:
         return
     emailer = Emailer(settings)
-    subject = f"{run_date.isoformat()} 二连板策略通过名单"
+    subject = f"{run_date.isoformat()} 强势股预警通过名单"
     lines = [subject, ""]
     for item in passed_results:
         lines.append(
             f"{item['code']} {item['name']} | 量比 {item['volume_ratio']} | "
-            f"成交额 {item['turnover_amount']} | 近3日主力净流入 {item['fund_flow_3d']}"
+            f"成交额 {item['turnover_amount']} | 当日主力净流入 {item['intraday_fund_flow']}"
         )
     body = "\n".join(lines)
 
