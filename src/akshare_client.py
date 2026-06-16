@@ -126,21 +126,56 @@ class AkShareClient:
         if not codes:
             return []
         wanted = {self._clean_code(code) for code in codes}
+        rows_by_code: dict[str, dict[str, object]] = {}
         spot = self._fetch_spot_with_volume_ratio()
-        if spot is None:
-            spot = self._fetch_tencent_quotes(list(wanted))
+        if spot is not None and not spot.empty:
+            for row in spot.to_dict("records"):
+                code = self._clean_code(row.get("代码"))
+                if code in wanted:
+                    row["source"] = row.get("source") or "eastmoney_spot"
+                    rows_by_code[code] = row
 
-        snapshots: list[MonitorSnapshot] = []
-        for row in spot.to_dict("records"):
+        missing_quotes = wanted - set(rows_by_code)
+        missing_volume_ratio = {
+            code
+            for code, row in rows_by_code.items()
+            if parse_decimal(row.get("量比")) is None
+        }
+
+        for code, row in self._fetch_single_bid_ask_quotes(sorted(missing_volume_ratio | missing_quotes)).items():
+            current = rows_by_code.get(code, {})
+            rows_by_code[code] = self._merge_quote_row(current, row)
+
+        still_missing = wanted - set(rows_by_code)
+        still_missing_amount = {
+            code
+            for code, row in rows_by_code.items()
+            if parse_cny_amount(row.get("成交额")) is None
+        }
+        for row in self._safe_fetch_tencent_quotes(sorted(still_missing | still_missing_amount)).to_dict("records"):
             code = self._clean_code(row.get("代码"))
             if code not in wanted:
                 continue
+            current = rows_by_code.get(code, {})
+            rows_by_code[code] = self._merge_quote_row(current, row)
+
+        snapshots: list[MonitorSnapshot] = []
+        for code in sorted(wanted):
+            row = rows_by_code.get(code)
+            if not row:
+                continue
+            volume_ratio = parse_decimal(row.get("量比"))
+            turnover_amount = parse_cny_amount(row.get("成交额"))
+            row["field_status"] = {
+                "volume_ratio": "ok" if volume_ratio is not None else "missing",
+                "turnover_amount": "ok" if turnover_amount is not None else "missing",
+            }
             snapshots.append(
                 MonitorSnapshot(
                     code=code,
                     name=str(row.get("名称") or "").strip(),
-                    volume_ratio=parse_decimal(row.get("量比")),
-                    turnover_amount=parse_cny_amount(row.get("成交额")),
+                    volume_ratio=volume_ratio,
+                    turnover_amount=turnover_amount,
                     raw_json=json.dumps(row, ensure_ascii=False, default=str),
                 )
             )
@@ -184,6 +219,17 @@ class AkShareClient:
             return {}
 
         flows = self._fetch_rank_fund_flows(wanted, run_date)
+        missing = wanted - set(flows)
+        if missing:
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = {
+                    executor.submit(self._fetch_single_day_fund_flow, code, run_date): code
+                    for code in missing
+                }
+                for future in as_completed(futures):
+                    flow = future.result()
+                    if flow is not None:
+                        flows[flow.code] = flow
         return flows
 
     def _fetch_rank_fund_flows(self, wanted: set[str], run_date: date) -> dict[str, FundFlow]:
@@ -270,6 +316,63 @@ class AkShareClient:
             )
         return pd.DataFrame(rows)
 
+    def _safe_fetch_tencent_quotes(self, codes: list[str]) -> pd.DataFrame:
+        try:
+            return self._fetch_tencent_quotes(codes)
+        except Exception:
+            return pd.DataFrame()
+
+    def _fetch_single_bid_ask_quotes(self, codes: list[str]) -> dict[str, dict[str, object]]:
+        if not codes:
+            return {}
+        result: dict[str, dict[str, object]] = {}
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = {executor.submit(self._fetch_single_bid_ask_quote, code): code for code in codes}
+            for future in as_completed(futures):
+                row = future.result()
+                if row:
+                    result[str(row["代码"])] = row
+        return result
+
+    def _fetch_single_bid_ask_quote(self, code: str) -> dict[str, object] | None:
+        import akshare as ak
+
+        clean = self._clean_code(code)
+        if not clean:
+            return None
+        try:
+            df = self._call(lambda: ak.stock_bid_ask_em(symbol=clean), f"{clean} 盘口报价")
+        except Exception:
+            return None
+        if df.empty:
+            return None
+
+        pairs: dict[str, object] = {}
+        records = df.to_dict("records")
+        for row in records:
+            key = row.get("item") or row.get("项目") or row.get("指标") or row.get("名称")
+            value = row.get("value") or row.get("值") or row.get("数值")
+            if key is not None:
+                pairs[str(key).strip()] = value
+        if not pairs and len(df.columns) >= 2:
+            key_col, value_col = df.columns[:2]
+            for row in records:
+                key = row.get(key_col)
+                if key is not None:
+                    pairs[str(key).strip()] = row.get(value_col)
+
+        volume_ratio = self._pick_pair(pairs, "量比")
+        amount = self._pick_pair(pairs, "金额", "成交额")
+        name = self._pick_pair(pairs, "名称", "股票简称")
+        return {
+            "代码": clean,
+            "名称": name or "",
+            "成交额": parse_cny_amount(amount),
+            "量比": parse_decimal(volume_ratio),
+            "source": "eastmoney_bid_ask",
+            "raw_pairs": pairs,
+        }
+
     def _fetch_eastmoney_spot(self) -> pd.DataFrame | None:
         fields = "f12,f14,f3,f6,f10"
         url = (
@@ -291,9 +394,41 @@ class AkShareClient:
                 "涨跌幅": parse_decimal(row.get("f3")),
                 "成交额": parse_cny_amount(row.get("f6")),
                 "量比": parse_decimal(row.get("f10")),
+                "source": "eastmoney_direct_spot",
             }
             for row in rows
         )
+
+    @staticmethod
+    def _merge_quote_row(current: dict[str, object], fallback: dict[str, object]) -> dict[str, object]:
+        merged = dict(current)
+        sources = []
+        for source in (current.get("source"), fallback.get("source")):
+            if source:
+                sources.extend(str(source).split("+"))
+        for key in ("代码", "名称", "成交额", "量比"):
+            current_value = merged.get(key)
+            fallback_value = fallback.get(key)
+            if current_value is None or current_value == "":
+                merged[key] = fallback_value
+            elif key in {"成交额", "量比"}:
+                parser = parse_cny_amount if key == "成交额" else parse_decimal
+                if parser(current_value) is None and parser(fallback_value) is not None:
+                    merged[key] = fallback_value
+        if fallback.get("raw_pairs"):
+            merged["bid_ask_raw_pairs"] = fallback.get("raw_pairs")
+        merged["source"] = "+".join(dict.fromkeys(sources)) if sources else fallback.get("source") or current.get("source")
+        return merged
+
+    @staticmethod
+    def _pick_pair(pairs: dict[str, object], *names: str) -> object | None:
+        for name in names:
+            if name in pairs:
+                return pairs[name]
+        for key, value in pairs.items():
+            if any(name in key for name in names):
+                return value
+        return None
 
     def _fetch_recent_closes(self, code: str, end_date: date, limit: int) -> list[Decimal]:
         clean = self._clean_code(code)
