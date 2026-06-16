@@ -159,6 +159,25 @@ class Repository:
     def add_candidate(self, stock: dict[str, Any], two_limit_date: str, monitor_until: str) -> bool:
         self.upsert_stock(stock)
         with self.db.connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT 1
+                FROM candidate_pool
+                WHERE code = ? AND two_limit_date = ?
+                """,
+                (stock["code"], two_limit_date),
+            ).fetchone()
+            if existing is not None:
+                return False
+
+            conn.execute(
+                """
+                UPDATE candidate_pool
+                SET status = 'replaced', updated_at = ?
+                WHERE code = ? AND status = 'active'
+                """,
+                (now_text(), stock["code"]),
+            )
             before = conn.total_changes
             conn.execute(
                 """
@@ -324,4 +343,3 @@ class Repository:
                 """,
                 (code, trade_date, email_type, recipient, now_text(), subject),
             )
-

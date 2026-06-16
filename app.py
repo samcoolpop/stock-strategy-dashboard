@@ -30,6 +30,7 @@ STATUS_LABELS = {
     "passed": "通过",
     "expired": "过期",
     "watching": "观察中",
+    "replaced": "已替换",
     "failed": "失败",
     "success": "成功",
     "running": "运行中",
@@ -197,6 +198,22 @@ def fmt_amount(value) -> str:
     return f"{value:.2f}"
 
 
+def format_strategy_table(df: pd.DataFrame) -> pd.DataFrame:
+    display = df.copy()
+    if "final_status" in display.columns:
+        display["final_status"] = display["final_status"].map(status_zh)
+    if "pool_status" in display.columns:
+        display["pool_status"] = display["pool_status"].map(status_zh)
+    if "status" in display.columns:
+        display["status"] = display["status"].map(status_zh)
+    if "turnover_amount" in display.columns:
+        display["turnover_amount"] = display["turnover_amount"].map(fmt_amount)
+    if "fund_flow_3d" in display.columns:
+        display["fund_flow_3d"] = display["fund_flow_3d"].map(fmt_amount)
+        display = display.rename(columns={"fund_flow_3d": "intraday_fund_flow"})
+    return display
+
+
 def load_home_data() -> dict[str, pd.DataFrame]:
     return {
         "latest_monitor": read_sql(
@@ -230,13 +247,15 @@ def load_home_data() -> dict[str, pd.DataFrame]:
             """
             SELECT sr.trade_date, sr.code, s.name, sr.volume_ratio_ok, sr.turnover_amount_ok,
                    sr.fund_flow_3d, sr.fund_flow_ok, sr.final_status,
-                   ds.volume_ratio, ds.turnover_amount
+                   ds.volume_ratio, ds.turnover_amount,
+                   cp.pool_date, cp.monitor_until, cp.status AS pool_status
             FROM strategy_results sr
             JOIN stocks s ON s.code = sr.code
+            LEFT JOIN candidate_pool cp ON cp.id = sr.candidate_pool_id
             LEFT JOIN daily_snapshots ds
                 ON ds.code = sr.code AND ds.trade_date = sr.trade_date AND ds.captured_at = '14:30'
             WHERE sr.trade_date = (SELECT MAX(trade_date) FROM strategy_results)
-            ORDER BY sr.final_status DESC, sr.code
+            ORDER BY cp.pool_date DESC, sr.final_status DESC, sr.code
             """
         ),
     }
@@ -309,12 +328,26 @@ def home_page() -> None:
     if latest_results.empty:
         st.info("暂无策略结果。盘中监控任务运行后会显示。")
     else:
-        result_display = latest_results.copy()
-        result_display["final_status"] = result_display["final_status"].map(status_zh)
-        result_display["turnover_amount"] = result_display["turnover_amount"].map(fmt_amount)
-        result_display["fund_flow_3d"] = result_display["fund_flow_3d"].map(fmt_amount)
-        result_display = result_display.rename(columns={"fund_flow_3d": "intraday_fund_flow"})
-        st.dataframe(result_display, width="stretch", hide_index=True)
+        warning_results = latest_results[
+            latest_results["volume_ratio_ok"].eq(1)
+            & latest_results["turnover_amount_ok"].eq(1)
+        ].copy()
+        passed_results = latest_results[latest_results["final_status"].eq("passed")].copy()
+
+        st.subheader("预警触发名单")
+        if warning_results.empty:
+            st.info("暂无股票同时满足量比和成交额预警条件。")
+        else:
+            st.dataframe(format_strategy_table(warning_results), width="stretch", hide_index=True)
+
+        st.subheader("最终通过名单")
+        if passed_results.empty:
+            st.info("暂无股票通过全部条件。若上方有预警触发名单，说明暂未通过当日主力资金净流入过滤。")
+        else:
+            st.dataframe(format_strategy_table(passed_results), width="stretch", hide_index=True)
+
+        with st.expander("查看完整监控明细", expanded=False):
+            st.dataframe(format_strategy_table(latest_results), width="stretch", hide_index=True)
 
     st.subheader("备选池更新")
     if latest_close.empty:
@@ -373,10 +406,7 @@ def history_page() -> None:
     if df.empty:
         st.info("没有匹配的历史记录。")
     else:
-        df["turnover_amount"] = df["turnover_amount"].map(fmt_amount)
-        df["fund_flow_3d"] = df["fund_flow_3d"].map(fmt_amount)
-        df["final_status"] = df["final_status"].map(status_zh)
-        st.dataframe(df, width="stretch", hide_index=True)
+        st.dataframe(format_strategy_table(df), width="stretch", hide_index=True)
 
 
 def stock_detail_page() -> None:
