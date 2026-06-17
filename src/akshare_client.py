@@ -218,19 +218,7 @@ class AkShareClient:
         if not wanted:
             return {}
 
-        flows = self._fetch_rank_fund_flows(wanted, run_date)
-        missing = wanted - set(flows)
-        if missing:
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                futures = {
-                    executor.submit(self._fetch_single_day_fund_flow, code, run_date): code
-                    for code in missing
-                }
-                for future in as_completed(futures):
-                    flow = future.result()
-                    if flow is not None:
-                        flows[flow.code] = flow
-        return flows
+        return self._fetch_rank_fund_flows(wanted, run_date)
 
     def _fetch_rank_fund_flows(self, wanted: set[str], run_date: date) -> dict[str, FundFlow]:
         fields = "f12,f14,f62"

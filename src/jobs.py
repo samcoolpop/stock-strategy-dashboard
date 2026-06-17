@@ -3,14 +3,13 @@ from __future__ import annotations
 import argparse
 import traceback
 from datetime import date
-from decimal import Decimal
 
 from .config import get_settings
 from .dates import add_business_days, is_business_day, parse_date
 from .db import Database, Repository
 from .emailer import EmailNotConfigured, Emailer
 from .parsing import to_db_decimal
-from .strategy import evaluate_snapshot
+from .strategy import MAX_VOLUME_RATIO, MIN_TURNOVER_AMOUNT, evaluate_snapshot
 from .wencai import WencaiClient
 from .akshare_client import AkShareClient
 
@@ -72,7 +71,23 @@ def monitor(run_date: date) -> int:
         client = make_data_client(settings)
         codes = [row["code"] for row in candidates]
         snapshots = {item.code: item for item in client.fetch_monitor_snapshots(codes)}
-        intraday_flows = client.fetch_intraday_fund_flows(codes, run_date) if hasattr(client, "fetch_intraday_fund_flows") else {}
+        warning_codes: list[str] = []
+        for candidate in candidates:
+            snapshot = snapshots.get(candidate["code"])
+            if (
+                snapshot is not None
+                and snapshot.volume_ratio is not None
+                and snapshot.volume_ratio < MAX_VOLUME_RATIO
+                and snapshot.turnover_amount is not None
+                and snapshot.turnover_amount >= MIN_TURNOVER_AMOUNT
+            ):
+                warning_codes.append(candidate["code"])
+
+        intraday_flows = (
+            client.fetch_intraday_fund_flows(warning_codes, run_date)
+            if warning_codes and hasattr(client, "fetch_intraday_fund_flows")
+            else {}
+        )
         passed_results: list[dict[str, object]] = []
 
         for candidate in candidates:
@@ -95,7 +110,7 @@ def monitor(run_date: date) -> int:
             )
 
             flow = intraday_flows.get(code)
-            intraday_fund_flow = flow.main_net_inflow if flow is not None else Decimal("0")
+            intraday_fund_flow = flow.main_net_inflow if flow is not None else None
             if flow is not None:
                 repo.insert_fund_flow(
                     {
@@ -135,7 +150,10 @@ def monitor(run_date: date) -> int:
         repo.finish_job(
             job_id,
             "success",
-            f"监控 {len(candidates)} 只，通过 {len(passed_results)} 只，过期 {expired} 只。",
+            (
+                f"监控 {len(candidates)} 只，预警 {len(warning_codes)} 只，"
+                f"资金流取到 {len(intraday_flows)} 只，通过 {len(passed_results)} 只，过期 {expired} 只。"
+            ),
             len(candidates),
         )
         return len(passed_results)

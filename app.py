@@ -189,7 +189,7 @@ def init_database_if_needed() -> None:
 
 def fmt_amount(value) -> str:
     if pd.isna(value):
-        return ""
+        return "未取到"
     value = float(value)
     if abs(value) >= 100000000:
         return f"{value / 100000000:.2f} 亿"
@@ -247,6 +247,11 @@ def load_home_data() -> dict[str, pd.DataFrame]:
             """
             SELECT sr.trade_date, sr.code, s.name, sr.volume_ratio_ok, sr.turnover_amount_ok,
                    sr.fund_flow_3d, sr.fund_flow_ok, sr.final_status,
+                   CASE
+                       WHEN sr.fund_flow_3d IS NULL THEN '未取到'
+                       WHEN sr.fund_flow_ok = 1 THEN '净流入'
+                       ELSE '未净流入'
+                   END AS fund_flow_status,
                    ds.volume_ratio, ds.turnover_amount,
                    cp.pool_date, cp.monitor_until, cp.status AS pool_status
             FROM strategy_results sr
@@ -279,11 +284,23 @@ def monitor_message(latest_monitor: pd.DataFrame, latest_results: pd.DataFrame) 
         ).sum()
     )
     passed_count = int((latest_results["final_status"] == "passed").sum())
+    missing_fund_count = int(
+        (
+            latest_results["volume_ratio_ok"].eq(1)
+            & latest_results["turnover_amount_ok"].eq(1)
+            & latest_results["fund_flow_3d"].isna()
+        ).sum()
+    )
     data_date = str(latest_results.iloc[0]["trade_date"])
 
     if warning_count == 0:
         return "已运行，未触发预警", f"{data_date} 已监控 {len(latest_results)} 只备选股，但暂无股票同时满足量比和成交额预警条件。"
     if passed_count == 0:
+        if missing_fund_count:
+            return (
+                "已触发预警，资金流未取到",
+                f"{data_date} 有 {warning_count} 只股票满足量比和成交额条件，其中 {missing_fund_count} 只未取到当日主力资金流，需要人工确认同花顺资金分析。",
+            )
         return "已触发预警，未通过资金流", f"{data_date} 有 {warning_count} 只股票满足量比和成交额条件，但暂无股票通过当日主力资金净流入过滤。"
     return "已出现通过标的", f"{data_date} 有 {passed_count} 只股票通过全部条件。"
 
@@ -311,12 +328,24 @@ def home_page() -> None:
         else 0
     )
     passed_count = int((latest_results["final_status"] == "passed").sum()) if not latest_results.empty else 0
+    missing_fund_count = (
+        int(
+            (
+                latest_results["volume_ratio_ok"].eq(1)
+                & latest_results["turnover_amount_ok"].eq(1)
+                & latest_results["fund_flow_3d"].isna()
+            ).sum()
+        )
+        if not latest_results.empty
+        else 0
+    )
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("盘中监控状态", status_title)
     col2.metric("预警触发", warning_count)
-    col3.metric("最终通过", passed_count)
-    col4.metric("活跃备选", len(active))
+    col3.metric("资金流未取到", missing_fund_count)
+    col4.metric("最终通过", passed_count)
+    col5.metric("活跃备选", len(active))
 
     st.subheader("盘中交易预警")
     st.info(status_detail)
@@ -338,6 +367,11 @@ def home_page() -> None:
         if warning_results.empty:
             st.info("暂无股票同时满足量比和成交额预警条件。")
         else:
+            missing_fund_results = warning_results[warning_results["fund_flow_3d"].isna()].copy()
+            if not missing_fund_results.empty:
+                st.warning(
+                    f"{len(missing_fund_results)} 只预警股票未取到当日主力资金流，需人工查看同花顺资金分析确认。"
+                )
             st.dataframe(format_strategy_table(warning_results), width="stretch", hide_index=True)
 
         st.subheader("最终通过名单")
@@ -393,6 +427,11 @@ def history_page() -> None:
         f"""
         SELECT sr.trade_date, sr.code, s.name, s.market, ds.volume_ratio, ds.turnover_amount,
                sr.fund_flow_3d, sr.volume_ratio_ok, sr.turnover_amount_ok, sr.fund_flow_ok,
+               CASE
+                   WHEN sr.fund_flow_3d IS NULL THEN '未取到'
+                   WHEN sr.fund_flow_ok = 1 THEN '净流入'
+                   ELSE '未净流入'
+               END AS fund_flow_status,
                sr.final_status
         FROM strategy_results sr
         JOIN stocks s ON s.code = sr.code
@@ -439,7 +478,13 @@ def stock_detail_page() -> None:
     snapshots = read_sql(
         """
         SELECT ds.trade_date, ds.captured_at, ds.volume_ratio, ds.turnover_amount,
-               sr.fund_flow_3d, sr.final_status
+               sr.fund_flow_3d,
+               CASE
+                   WHEN sr.fund_flow_3d IS NULL THEN '未取到'
+                   WHEN sr.fund_flow_ok = 1 THEN '净流入'
+                   ELSE '未净流入'
+               END AS fund_flow_status,
+               sr.final_status
         FROM daily_snapshots ds
         LEFT JOIN strategy_results sr ON sr.code = ds.code AND sr.trade_date = ds.trade_date
         WHERE ds.code = ?

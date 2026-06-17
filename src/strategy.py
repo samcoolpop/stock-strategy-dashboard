@@ -52,7 +52,7 @@ class MonitorSnapshot:
 class StrategyDecision:
     volume_ratio_ok: bool
     turnover_amount_ok: bool
-    fund_flow_3d: Decimal
+    fund_flow_3d: Decimal | None
     fund_flow_ok: bool
     final_status: str
 
@@ -64,11 +64,11 @@ class StrategyDecision:
 def evaluate_snapshot(
     volume_ratio: Decimal | None,
     turnover_amount: Decimal | None,
-    intraday_fund_flow: Decimal,
+    intraday_fund_flow: Decimal | None,
 ) -> StrategyDecision:
     volume_ratio_ok = volume_ratio is not None and volume_ratio < MAX_VOLUME_RATIO
     turnover_amount_ok = turnover_amount is not None and turnover_amount >= MIN_TURNOVER_AMOUNT
-    fund_flow_ok = intraday_fund_flow > 0
+    fund_flow_ok = intraday_fund_flow is not None and intraday_fund_flow > 0
     final_status = "passed" if volume_ratio_ok and turnover_amount_ok and fund_flow_ok else "watching"
     return StrategyDecision(
         volume_ratio_ok=volume_ratio_ok,

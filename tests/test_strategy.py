@@ -23,6 +23,12 @@ class StrategyTest(unittest.TestCase):
         self.assertFalse(decision.fund_flow_ok)
         self.assertEqual(decision.final_status, "watching")
 
+    def test_missing_fund_flow_stays_missing(self) -> None:
+        decision = evaluate_snapshot(Decimal("0.6"), Decimal("600000000"), None)
+        self.assertFalse(decision.fund_flow_ok)
+        self.assertIsNone(decision.fund_flow_3d)
+        self.assertEqual(decision.final_status, "watching")
+
     def test_pool_filters_st_and_star_market_but_keeps_chinext(self) -> None:
         self.assertFalse(StockCandidate(code="600001", name="ST测试", is_st=True).eligible_for_pool)
         self.assertFalse(StockCandidate(code="688001", name="科创测试", is_star=True).eligible_for_pool)
