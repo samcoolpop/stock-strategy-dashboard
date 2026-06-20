@@ -29,6 +29,7 @@ def _bool_env(name: str, default: bool) -> bool:
 class Settings:
     db_path: Path
     data_source: str
+    tushare_token: str
     remote_db_url: str
     wencai_user_data_dir: Path
     wencai_headless: bool
@@ -59,6 +60,7 @@ def get_settings() -> Settings:
     return Settings(
         db_path=db_path,
         data_source=os.getenv("APP_DATA_SOURCE", "akshare").strip().lower(),
+        tushare_token=os.getenv("TUSHARE_TOKEN", "").strip(),
         remote_db_url=os.getenv(
             "APP_REMOTE_DB_URL",
             "https://raw.githubusercontent.com/samcoolpop/stock-strategy-dashboard/main/stock_strategy.sqlite3",
