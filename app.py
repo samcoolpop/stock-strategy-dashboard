@@ -533,9 +533,10 @@ def stock_detail_page() -> None:
 def config_page() -> None:
     st.title("配置与任务")
     settings = get_settings()
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     col1.metric("数据库", str(dashboard_db_path()))
     col2.metric("SMTP", "已配置" if settings.smtp_host and settings.smtp_to else "未完整配置")
+    col3.metric("收盘入池主源", "Tushare" if settings.tushare_token else "AkShare")
 
     st.subheader("手动补跑任务")
     admin_pin = config_value("ADMIN_PIN")
