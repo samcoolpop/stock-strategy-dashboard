@@ -128,6 +128,9 @@ GITHUB_BRANCH = "main"
 
 ```toml
 TUSHARE_TOKEN = "你的 Tushare Pro token"
+TUSHARE_MIN_CALL_INTERVAL = "65"
 ```
 
 收盘入池 GitHub Actions 现在会在北京时间 15:40、16:30、18:00 冗余运行，降低日线数据延迟导致未入池的概率。
+
+低积分 Tushare 账号可能有较低频率限制。默认 `TUSHARE_MIN_CALL_INTERVAL=65`，表示每次 Tushare API 调用之间至少间隔 65 秒，避免触发 1 次/分钟限流。积分提高后可以适当调低。
