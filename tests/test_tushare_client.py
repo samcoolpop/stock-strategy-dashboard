@@ -24,6 +24,16 @@ class TushareClientTest(unittest.TestCase):
                 ["20260615", "20260616", "20260617", "20260618"],
             )
 
+    def test_rate_limit_waits_between_calls(self) -> None:
+        client = TushareClient("token", min_call_interval=65)
+        client._last_call_at = 100
+        with patch("src.tushare_client.time.monotonic", return_value=120), patch(
+            "src.tushare_client.time.sleep"
+        ) as sleep:
+            client._wait_for_rate_limit()
+
+        sleep.assert_called_once_with(45)
+
 
 if __name__ == "__main__":
     unittest.main()
