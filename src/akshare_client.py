@@ -41,7 +41,7 @@ class AkShareClient:
         query_date = run_date or date.today()
         spot = self._fetch_spot_with_volume_ratio()
         if spot is None or spot.empty:
-            return []
+            raise AkShareError("收盘入池股票池接口不可用，无法确认新增备选股。")
 
         rows = []
         for row in spot.to_dict("records"):
