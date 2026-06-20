@@ -88,7 +88,7 @@ class TushareClient:
             {"exchange": "SSE", "start_date": start_date, "end_date": end_date.strftime("%Y%m%d")},
             "cal_date,is_open",
         )
-        open_dates = [str(row["cal_date"]) for row in rows if int(row.get("is_open") or 0) == 1]
+        open_dates = sorted(str(row["cal_date"]) for row in rows if int(row.get("is_open") or 0) == 1)
         return open_dates[-limit:]
 
     def _stock_basic(self) -> dict[str, dict[str, Any]]:
