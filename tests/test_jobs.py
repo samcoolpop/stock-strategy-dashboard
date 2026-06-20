@@ -10,7 +10,7 @@ from src.jobs import fetch_close_scan_candidates
 
 class JobsTest(unittest.TestCase):
     def test_close_scan_uses_tushare_when_token_exists(self) -> None:
-        settings = SimpleNamespace(tushare_token="token")
+        settings = SimpleNamespace(tushare_token="token", tushare_min_call_interval=65)
         with patch("src.jobs.TushareClient") as tushare_client, patch("src.jobs.AkShareClient") as akshare_client:
             tushare_client.return_value.fetch_momentum_candidates.return_value = ["candidate"]
             candidates, source, errors = fetch_close_scan_candidates(settings, date(2026, 6, 18))
@@ -19,9 +19,10 @@ class JobsTest(unittest.TestCase):
         self.assertEqual(source, "tushare")
         self.assertEqual(errors, [])
         akshare_client.assert_not_called()
+        tushare_client.assert_called_once_with("token", min_call_interval=65)
 
     def test_close_scan_falls_back_to_akshare_when_tushare_fails(self) -> None:
-        settings = SimpleNamespace(tushare_token="token")
+        settings = SimpleNamespace(tushare_token="token", tushare_min_call_interval=65)
         with patch("src.jobs.TushareClient") as tushare_client, patch("src.jobs.AkShareClient") as akshare_client:
             tushare_client.return_value.fetch_momentum_candidates.side_effect = RuntimeError("bad token")
             akshare_client.return_value.fetch_momentum_candidates.return_value = ["fallback"]
