@@ -19,10 +19,25 @@ def _load_env() -> None:
 
 
 def _bool_env(name: str, default: bool) -> bool:
-    value = os.getenv(name)
+    value = _config_value(name)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _config_value(name: str, default: str | None = None) -> str | None:
+    value = os.getenv(name)
+    if value is not None:
+        return value
+    try:
+        import streamlit as st
+
+        secret_value = st.secrets.get(name, None)
+        if secret_value is not None:
+            return str(secret_value)
+    except Exception:
+        pass
+    return default
 
 
 @dataclass(frozen=True)
@@ -43,34 +58,34 @@ class Settings:
 
 def get_settings() -> Settings:
     _load_env()
-    db_path = Path(os.getenv("APP_DB_PATH", "stock_strategy.sqlite3"))
+    db_path = Path(_config_value("APP_DB_PATH", "stock_strategy.sqlite3") or "stock_strategy.sqlite3")
     if not db_path.is_absolute():
         db_path = ROOT_DIR / db_path
 
-    user_data_dir = Path(os.getenv("WENCAI_USER_DATA_DIR", ".wencai_browser"))
+    user_data_dir = Path(_config_value("WENCAI_USER_DATA_DIR", ".wencai_browser") or ".wencai_browser")
     if not user_data_dir.is_absolute():
         user_data_dir = ROOT_DIR / user_data_dir
 
     recipients = tuple(
         item.strip()
-        for item in os.getenv("SMTP_TO", "").replace(";", ",").split(",")
+        for item in (_config_value("SMTP_TO", "") or "").replace(";", ",").split(",")
         if item.strip()
     )
 
     return Settings(
         db_path=db_path,
-        data_source=os.getenv("APP_DATA_SOURCE", "akshare").strip().lower(),
-        tushare_token=os.getenv("TUSHARE_TOKEN", "").strip(),
-        remote_db_url=os.getenv(
+        data_source=(_config_value("APP_DATA_SOURCE", "akshare") or "akshare").strip().lower(),
+        tushare_token=(_config_value("TUSHARE_TOKEN", "") or "").strip(),
+        remote_db_url=(_config_value(
             "APP_REMOTE_DB_URL",
             "https://raw.githubusercontent.com/samcoolpop/stock-strategy-dashboard/main/stock_strategy.sqlite3",
-        ).strip(),
+        ) or "").strip(),
         wencai_user_data_dir=user_data_dir,
         wencai_headless=_bool_env("WENCAI_HEADLESS", False),
-        smtp_host=os.getenv("SMTP_HOST", "").strip(),
-        smtp_port=int(os.getenv("SMTP_PORT", "465")),
-        smtp_user=os.getenv("SMTP_USER", "").strip(),
-        smtp_password=os.getenv("SMTP_PASSWORD", ""),
-        smtp_from=os.getenv("SMTP_FROM", "").strip(),
+        smtp_host=(_config_value("SMTP_HOST", "") or "").strip(),
+        smtp_port=int(_config_value("SMTP_PORT", "465") or "465"),
+        smtp_user=(_config_value("SMTP_USER", "") or "").strip(),
+        smtp_password=_config_value("SMTP_PASSWORD", "") or "",
+        smtp_from=(_config_value("SMTP_FROM", "") or "").strip(),
         smtp_to=recipients,
     )
