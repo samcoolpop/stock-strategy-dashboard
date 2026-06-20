@@ -17,8 +17,10 @@ on:
     - cron: "10 6 * * 1-5"
     - cron: "15 6 * * 1-5"
     - cron: "20 6 * * 1-5"
-    # Beijing 15:40. Add newly confirmed momentum candidates after close.
+    # Beijing 15:40/16:30/18:00. Add newly confirmed momentum candidates after close.
     - cron: "40 7 * * 1-5"
+    - cron: "30 8 * * 1-5"
+    - cron: "0 10 * * 1-5"
 
 permissions:
   contents: write
@@ -33,6 +35,7 @@ jobs:
     env:
       APP_DATA_SOURCE: akshare
       APP_DB_PATH: stock_strategy.sqlite3
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
       TZ: Asia/Shanghai
     steps:
       - name: Checkout repository
@@ -60,7 +63,7 @@ jobs:
           if [ -z "$INPUT_JOB" ]; then
             if [ "$EVENT_SCHEDULE" = "10 6 * * 1-5" ] || [ "$EVENT_SCHEDULE" = "15 6 * * 1-5" ] || [ "$EVENT_SCHEDULE" = "20 6 * * 1-5" ]; then
               INPUT_JOB="monitor"
-            elif [ "$EVENT_SCHEDULE" = "40 7 * * 1-5" ]; then
+            elif [ "$EVENT_SCHEDULE" = "40 7 * * 1-5" ] || [ "$EVENT_SCHEDULE" = "30 8 * * 1-5" ] || [ "$EVENT_SCHEDULE" = "0 10 * * 1-5" ]; then
               INPUT_JOB="close-scan"
             else
               INPUT_JOB="both"
