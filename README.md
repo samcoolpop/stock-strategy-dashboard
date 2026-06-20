@@ -67,7 +67,7 @@ python -m src.jobs test-email
 仓库包含 GitHub Actions 工作流 `.github/workflows/sync-data.yml`：
 
 - 北京时间 14:10、14:15、14:20 冗余运行 `python -m src.jobs monitor`
-- 北京时间 15:40 运行 `python -m src.jobs close-scan`
+- 北京时间 15:40、16:30、18:00 冗余运行 `python -m src.jobs close-scan`
 - 任务完成后把 `stock_strategy.sqlite3` 提交回仓库
 
 Streamlit Cloud 会从仓库读取数据库文件。首次部署或手动刷新后，小伙伴访问公网地址即可看到最新已同步的数据。
@@ -110,6 +110,24 @@ GITHUB_BRANCH = "main"
 - 量比兜底：东方财富单股盘口报价，逐只补查主源缺失的量比。
 - 成交额兜底：腾讯实时行情。
 - 资金流主源：东方财富当日主力资金流排名。
-- 资金流兜底：东方财富单股历史资金流中当天记录。
+- 资金流缺失时：显示“未取到”，并提示人工确认同花顺资金分析。
 
 如果量比仍缺失，系统不会误判为通过；快照原始数据中会记录字段缺失状态，方便排查未预警原因。
+
+## 免费数据源容错方案
+
+收盘入池和盘中预警分开处理：
+
+- 收盘入池优先使用 Tushare Pro 日线数据。配置 `TUSHARE_TOKEN` 后，系统会用 Tushare 的交易日历、股票基础信息和日线收盘价计算近 2/3 个交易日累计涨幅。
+- 如果未配置 `TUSHARE_TOKEN`，或 Tushare 报错，系统会回退到 AkShare/东方财富。
+- 如果所有收盘入池数据源都失败，任务会标记为失败并写入错误原因，不再显示“成功 0 只”。
+- 盘中预警继续使用免费实时行情源抓量比和成交额，并且只对预警命中的股票补抓主力资金流。
+- 主力资金流抓不到时显示“未取到”，不再按 0 处理；这类股票进入“需人工确认同花顺资金分析”的应急名单。
+
+云端建议在 GitHub Actions Secrets 和 Streamlit Cloud Secrets 中都配置：
+
+```toml
+TUSHARE_TOKEN = "你的 Tushare Pro token"
+```
+
+收盘入池 GitHub Actions 现在会在北京时间 15:40、16:30、18:00 冗余运行，降低日线数据延迟导致未入池的概率。
