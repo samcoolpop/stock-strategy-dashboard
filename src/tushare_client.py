@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
@@ -24,12 +24,14 @@ class TushareError(RuntimeError):
     pass
 
 
-@dataclass(frozen=True)
+@dataclass
 class TushareClient:
     token: str
     retries: int = 2
     retry_delay: float = 1.0
+    min_call_interval: float = 65.0
     api_url: str = "https://api.tushare.pro"
+    _last_call_at: float = field(default=0.0, init=False, repr=False)
 
     def fetch_momentum_candidates(self, run_date: date | None = None) -> list[StockCandidate]:
         if not self.token:
@@ -106,6 +108,7 @@ class TushareClient:
         last_error: Exception | None = None
         for attempt in range(self.retries + 1):
             try:
+                self._wait_for_rate_limit()
                 response = requests.post(
                     self.api_url,
                     json={"api_name": api_name, "token": self.token, "params": params, "fields": fields},
@@ -113,6 +116,7 @@ class TushareClient:
                 )
                 response.raise_for_status()
                 payload = response.json()
+                self._last_call_at = time.monotonic()
                 if payload.get("code") != 0:
                     raise TushareError(f"Tushare {api_name} 返回错误：{payload.get('msg') or payload}")
                 data = payload.get("data") or {}
@@ -124,3 +128,11 @@ class TushareClient:
                 if attempt < self.retries:
                     time.sleep(self.retry_delay * (attempt + 1))
         raise TushareError(f"Tushare 接口失败：{api_name} {json.dumps(params, ensure_ascii=False)}：{last_error}") from last_error
+
+    def _wait_for_rate_limit(self) -> None:
+        if self.min_call_interval <= 0 or self._last_call_at <= 0:
+            return
+        elapsed = time.monotonic() - self._last_call_at
+        remaining = self.min_call_interval - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
