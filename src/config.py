@@ -45,6 +45,7 @@ class Settings:
     db_path: Path
     data_source: str
     tushare_token: str
+    tushare_min_call_interval: float
     remote_db_url: str
     wencai_user_data_dir: Path
     wencai_headless: bool
@@ -76,6 +77,7 @@ def get_settings() -> Settings:
         db_path=db_path,
         data_source=(_config_value("APP_DATA_SOURCE", "akshare") or "akshare").strip().lower(),
         tushare_token=(_config_value("TUSHARE_TOKEN", "") or "").strip(),
+        tushare_min_call_interval=float(_config_value("TUSHARE_MIN_CALL_INTERVAL", "65") or "65"),
         remote_db_url=(_config_value(
             "APP_REMOTE_DB_URL",
             "https://raw.githubusercontent.com/samcoolpop/stock-strategy-dashboard/main/stock_strategy.sqlite3",
