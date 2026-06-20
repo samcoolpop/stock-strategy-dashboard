@@ -10,6 +10,7 @@ from .db import Database, Repository
 from .emailer import EmailNotConfigured, Emailer
 from .parsing import to_db_decimal
 from .strategy import MAX_VOLUME_RATIO, MIN_TURNOVER_AMOUNT, evaluate_snapshot
+from .tushare_client import TushareClient
 from .wencai import WencaiClient
 from .akshare_client import AkShareClient
 
@@ -27,6 +28,21 @@ def make_data_client(settings):
     return AkShareClient()
 
 
+def fetch_close_scan_candidates(settings, run_date: date):
+    errors: list[str] = []
+    if settings.tushare_token:
+        try:
+            return TushareClient(settings.tushare_token).fetch_momentum_candidates(run_date), "tushare", errors
+        except Exception as exc:
+            errors.append(f"Tushare 失败：{exc}")
+
+    try:
+        return AkShareClient().fetch_momentum_candidates(run_date), "akshare", errors
+    except Exception as exc:
+        errors.append(f"AkShare 失败：{exc}")
+        raise RuntimeError("收盘入池数据源全部失败：" + "；".join(errors)) from exc
+
+
 def close_scan(run_date: date) -> int:
     settings = get_settings()
     repo = make_repo()
@@ -36,17 +52,16 @@ def close_scan(run_date: date) -> int:
         return 0
 
     try:
-        client = make_data_client(settings)
-        if hasattr(client, "fetch_momentum_candidates"):
-            candidates = client.fetch_momentum_candidates(run_date)
-        else:
-            candidates = client.fetch_two_limit_up()
+        candidates, source, source_errors = fetch_close_scan_candidates(settings, run_date)
         inserted = 0
         monitor_until = add_business_days(run_date, 10).isoformat()
         for candidate in candidates:
             if repo.add_candidate(candidate.to_record(), run_date.isoformat(), monitor_until):
                 inserted += 1
-        repo.finish_job(job_id, "success", f"入池 {inserted} 只，数据源返回 {len(candidates)} 只。", inserted)
+        message = f"入池 {inserted} 只，数据源 {source} 返回 {len(candidates)} 只。"
+        if source_errors:
+            message += " 备用说明：" + "；".join(source_errors)
+        repo.finish_job(job_id, "success", message, inserted)
         return inserted
     except Exception as exc:
         repo.finish_job(job_id, "failed", f"{exc}\n{traceback.format_exc()}", 0)
