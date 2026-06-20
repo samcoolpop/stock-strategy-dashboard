@@ -32,7 +32,11 @@ def fetch_close_scan_candidates(settings, run_date: date):
     errors: list[str] = []
     if settings.tushare_token:
         try:
-            return TushareClient(settings.tushare_token).fetch_momentum_candidates(run_date), "tushare", errors
+            client = TushareClient(
+                settings.tushare_token,
+                min_call_interval=settings.tushare_min_call_interval,
+            )
+            return client.fetch_momentum_candidates(run_date), "tushare", errors
         except Exception as exc:
             errors.append(f"Tushare 失败：{exc}")
 
