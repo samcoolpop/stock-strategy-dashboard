@@ -31,6 +31,7 @@ STATUS_LABELS = {
     "passed": "通过",
     "expired": "过期",
     "watching": "观察中",
+    "warning": "预警",
     "replaced": "已替换",
     "failed": "失败",
     "success": "成功",
@@ -417,7 +418,7 @@ def home_page() -> None:
 def history_page() -> None:
     st.title("历史记录")
     dates = read_sql("SELECT DISTINCT trade_date FROM strategy_results ORDER BY trade_date DESC")
-    statuses = ["全部", "passed", "watching"]
+    statuses = ["全部", "passed", "warning", "watching"]
 
     col1, col2, col3 = st.columns(3)
     selected_date = col1.selectbox("交易日期", ["全部"] + dates["trade_date"].tolist() if not dates.empty else ["全部"])
