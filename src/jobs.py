@@ -4,6 +4,7 @@ import argparse
 import traceback
 from datetime import date
 
+from .akshare_client import AkShareClient
 from .config import get_settings
 from .dates import add_business_days, is_business_day, parse_date
 from .db import Database, Repository
@@ -12,7 +13,6 @@ from .parsing import to_db_decimal
 from .strategy import MAX_VOLUME_RATIO, MIN_TURNOVER_AMOUNT, evaluate_snapshot
 from .tushare_client import TushareClient
 from .wencai import WencaiClient
-from .akshare_client import AkShareClient
 
 
 def make_repo() -> Repository:
@@ -28,13 +28,17 @@ def make_data_client(settings):
     return AkShareClient()
 
 
-def fetch_close_scan_candidates(settings, run_date: date):
+def fetch_close_scan_candidates(settings, run_date: date, repo: Repository | None = None):
     errors: list[str] = []
     if settings.tushare_token:
         try:
+            cache_kwargs = {}
+            if repo is not None:
+                cache_kwargs = {"cache_get": repo.get_api_cache, "cache_set": repo.set_api_cache}
             client = TushareClient(
                 settings.tushare_token,
                 min_call_interval=settings.tushare_min_call_interval,
+                **cache_kwargs,
             )
             return client.fetch_momentum_candidates(run_date), "tushare", errors
         except Exception as exc:
@@ -52,11 +56,11 @@ def close_scan(run_date: date) -> int:
     repo = make_repo()
     job_id = repo.start_job("close_scan", run_date.isoformat())
     if not is_business_day(run_date):
-        repo.finish_job(job_id, "skipped", "非工作日，跳过收盘后入池。", 0)
+        repo.finish_job(job_id, "skipped", "非交易日，跳过收盘后入池。", 0)
         return 0
 
     try:
-        candidates, source, source_errors = fetch_close_scan_candidates(settings, run_date)
+        candidates, source, source_errors = fetch_close_scan_candidates(settings, run_date, repo)
         inserted = 0
         monitor_until = add_business_days(run_date, 10).isoformat()
         for candidate in candidates:
@@ -77,7 +81,7 @@ def monitor(run_date: date) -> int:
     repo = make_repo()
     job_id = repo.start_job("monitor", run_date.isoformat())
     if not is_business_day(run_date):
-        repo.finish_job(job_id, "skipped", "非工作日，跳过 14:30 监控。", 0)
+        repo.finish_job(job_id, "skipped", "非交易日，跳过盘中监控。", 0)
         return 0
 
     try:
@@ -190,7 +194,7 @@ def send_strategy_email(
     if not passed_results:
         return
     emailer = Emailer(settings)
-    subject = f"{run_date.isoformat()} 强势股预警通过名单"
+    subject = f"{run_date.isoformat()} 短线强势股预警通过名单"
     lines = [subject, ""]
     for item in passed_results:
         lines.append(
