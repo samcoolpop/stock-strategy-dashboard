@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import json
 from datetime import date
 from unittest.mock import patch
 
@@ -33,6 +34,39 @@ class TushareClientTest(unittest.TestCase):
             client._wait_for_rate_limit()
 
         sleep.assert_called_once_with(45)
+
+    def test_call_uses_cache_before_network(self) -> None:
+        cached = json.dumps([{"cal_date": "20260623", "is_open": 1}])
+        client = TushareClient("token", cache_get=lambda _key: cached)
+
+        with patch("src.tushare_client.requests.post") as post:
+            rows = client._call("trade_cal", {"exchange": "SSE"}, "cal_date,is_open")
+
+        self.assertEqual(rows, [{"cal_date": "20260623", "is_open": 1}])
+        post.assert_not_called()
+
+    def test_call_writes_successful_response_to_cache(self) -> None:
+        writes: dict[str, str] = {}
+
+        class Response:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict:
+                return {
+                    "code": 0,
+                    "data": {
+                        "fields": ["cal_date", "is_open"],
+                        "items": [["20260623", 1]],
+                    },
+                }
+
+        client = TushareClient("token", cache_get=lambda _key: None, cache_set=writes.__setitem__)
+        with patch("src.tushare_client.requests.post", return_value=Response()):
+            rows = client._call("trade_cal", {"exchange": "SSE"}, "cal_date,is_open")
+
+        self.assertEqual(rows, [{"cal_date": "20260623", "is_open": 1}])
+        self.assertEqual(len(writes), 1)
 
 
 if __name__ == "__main__":
