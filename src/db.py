@@ -97,6 +97,12 @@ CREATE TABLE IF NOT EXISTS email_logs (
     subject TEXT NOT NULL,
     UNIQUE(code, trade_date, email_type, recipient)
 );
+
+CREATE TABLE IF NOT EXISTS api_cache (
+    cache_key TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -301,6 +307,7 @@ class Repository:
             )
 
     def start_job(self, job_name: str, run_date: str) -> int:
+        self.mark_stale_jobs()
         with self.db.connect() as conn:
             cursor = conn.execute(
                 """
@@ -310,6 +317,20 @@ class Repository:
                 (job_name, run_date, now_text()),
             )
             return int(cursor.lastrowid)
+
+    def mark_stale_jobs(self, max_age_minutes: int = 120) -> int:
+        with self.db.connect() as conn:
+            before = conn.total_changes
+            conn.execute(
+                """
+                UPDATE job_runs
+                SET finished_at = ?, status = 'failed', message = COALESCE(message, '') || ?
+                WHERE status = 'running'
+                  AND datetime(started_at) <= datetime('now', 'localtime', ?)
+                """,
+                (now_text(), f"\nMarked stale after {max_age_minutes} minutes.", f"-{max_age_minutes} minutes"),
+            )
+            return conn.total_changes - before
 
     def finish_job(self, job_id: int, status: str, message: str = "", rows_processed: int = 0) -> None:
         with self.db.connect() as conn:
@@ -342,4 +363,25 @@ class Repository:
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (code, trade_date, email_type, recipient, now_text(), subject),
+            )
+
+    def get_api_cache(self, cache_key: str) -> str | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM api_cache WHERE cache_key = ?",
+                (cache_key,),
+            ).fetchone()
+            return str(row["payload"]) if row is not None else None
+
+    def set_api_cache(self, cache_key: str, payload: str) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO api_cache (cache_key, payload, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(cache_key) DO UPDATE SET
+                    payload=excluded.payload,
+                    updated_at=excluded.updated_at
+                """,
+                (cache_key, payload, now_text()),
             )
