@@ -33,6 +33,17 @@ class JobsTest(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("Tushare 失败", errors[0])
 
+    def test_close_scan_falls_back_to_eastmoney_when_akshare_is_empty(self) -> None:
+        settings = SimpleNamespace(tushare_token="", tushare_min_call_interval=65)
+        with patch("src.jobs.AkShareClient") as akshare_client, patch("src.jobs.EastMoneyClient") as eastmoney_client:
+            akshare_client.return_value.fetch_momentum_candidates.return_value = []
+            eastmoney_client.return_value.fetch_momentum_candidates.return_value = ["eastmoney"]
+            candidates, source, errors = fetch_close_scan_candidates(settings, date(2026, 6, 18))
+
+        self.assertEqual(candidates, ["eastmoney"])
+        self.assertEqual(source, "eastmoney")
+        self.assertIn("AkShare 返回 0 只", errors)
+
 
 if __name__ == "__main__":
     unittest.main()
