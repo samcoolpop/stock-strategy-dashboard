@@ -56,7 +56,7 @@ def config_value(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
-def trigger_github_workflow(job: str) -> tuple[bool, str]:
+def trigger_github_workflow(job: str, run_date: str = "") -> tuple[bool, str]:
     token = config_value("GITHUB_ACTIONS_TOKEN")
     if not token:
         return False, "缺少 GITHUB_ACTIONS_TOKEN，无法触发 GitHub Actions。"
@@ -66,7 +66,10 @@ def trigger_github_workflow(job: str) -> tuple[bool, str]:
     workflow = config_value("GITHUB_WORKFLOW", GITHUB_WORKFLOW)
     branch = config_value("GITHUB_BRANCH", GITHUB_BRANCH)
     url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
-    payload = json.dumps({"ref": branch, "inputs": {"job": job}}).encode("utf-8")
+    inputs = {"job": job}
+    if run_date.strip():
+        inputs["run_date"] = run_date.strip()
+    payload = json.dumps({"ref": branch, "inputs": inputs}).encode("utf-8")
     request = Request(
         url,
         data=payload,
@@ -597,13 +600,14 @@ def config_page() -> None:
                 ["盘中监控", "收盘入池", "两项都跑"],
                 horizontal=True,
             )
+            run_date = st.text_input("指定日期（可选，YYYY-MM-DD；留空则自动判断）")
             submitted = st.form_submit_button("触发抓数并同步网页", disabled=workflow_busy)
         if submitted:
             if not hmac.compare_digest(pin, admin_pin):
                 st.error("操作密码不正确。")
             else:
                 job_map = {"盘中监控": "monitor", "收盘入池": "close-scan", "两项都跑": "both"}
-                ok, message = trigger_github_workflow(job_map[job_label])
+                ok, message = trigger_github_workflow(job_map[job_label], run_date)
                 st.cache_data.clear()
                 if ok:
                     st.success(message)
