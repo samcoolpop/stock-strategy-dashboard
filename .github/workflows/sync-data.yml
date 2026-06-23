@@ -12,6 +12,11 @@ on:
           - both
           - monitor
           - close-scan
+      run_date:
+        description: "Optional run date, YYYY-MM-DD. Empty means auto."
+        required: false
+        default: ""
+        type: string
   schedule:
     # Beijing 14:10/14:15/14:20. Redundant monitor runs before late-session trading.
     - cron: "10 6 * * 1-5"
@@ -59,6 +64,7 @@ jobs:
         run: |
           set +e
           INPUT_JOB="${{ github.event.inputs.job }}"
+          INPUT_DATE="${{ github.event.inputs.run_date }}"
           EVENT_SCHEDULE="${{ github.event.schedule }}"
           if [ -z "$INPUT_JOB" ]; then
             if [ "$EVENT_SCHEDULE" = "10 6 * * 1-5" ] || [ "$EVENT_SCHEDULE" = "15 6 * * 1-5" ] || [ "$EVENT_SCHEDULE" = "20 6 * * 1-5" ]; then
@@ -71,8 +77,12 @@ jobs:
           fi
 
           FAILED=0
+          DATE_ARGS=()
+          if [ -n "$INPUT_DATE" ]; then
+            DATE_ARGS=(--date "$INPUT_DATE")
+          fi
           if [ "$INPUT_JOB" = "monitor" ] || [ "$INPUT_JOB" = "both" ]; then
-            python -m src.jobs monitor
+            python -m src.jobs monitor "${DATE_ARGS[@]}"
             STATUS=$?
             if [ "$STATUS" -ne 0 ]; then
               echo "monitor failed with status $STATUS"
@@ -80,7 +90,7 @@ jobs:
             fi
           fi
           if [ "$INPUT_JOB" = "close-scan" ] || [ "$INPUT_JOB" = "both" ]; then
-            python -m src.jobs close-scan
+            python -m src.jobs close-scan "${DATE_ARGS[@]}"
             STATUS=$?
             if [ "$STATUS" -ne 0 ]; then
               echo "close-scan failed with status $STATUS"
