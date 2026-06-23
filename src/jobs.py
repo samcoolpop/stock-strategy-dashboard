@@ -6,8 +6,9 @@ from datetime import date
 
 from .akshare_client import AkShareClient
 from .config import get_settings
-from .dates import add_business_days, is_business_day, parse_date
+from .dates import add_business_days, close_scan_default_date, is_business_day, parse_date
 from .db import Database, Repository
+from .eastmoney_client import EastMoneyClient
 from .emailer import EmailNotConfigured, Emailer
 from .parsing import to_db_decimal
 from .strategy import MAX_VOLUME_RATIO, MIN_TURNOVER_AMOUNT, evaluate_snapshot
@@ -45,9 +46,18 @@ def fetch_close_scan_candidates(settings, run_date: date, repo: Repository | Non
             errors.append(f"Tushare 失败：{exc}")
 
     try:
-        return AkShareClient().fetch_momentum_candidates(run_date), "akshare", errors
+        candidates = AkShareClient().fetch_momentum_candidates(run_date)
+        if candidates:
+            return candidates, "akshare", errors
+        errors.append("AkShare 返回 0 只")
     except Exception as exc:
         errors.append(f"AkShare 失败：{exc}")
+
+    try:
+        candidates = EastMoneyClient().fetch_momentum_candidates(run_date)
+        return candidates, "eastmoney", errors
+    except Exception as exc:
+        errors.append(f"东方财富直连失败：{exc}")
         raise RuntimeError("收盘入池数据源全部失败：" + "；".join(errors)) from exc
 
 
@@ -230,15 +240,18 @@ def test_email() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="本地股票策略任务")
     parser.add_argument("command", choices=["init-db", "close-scan", "monitor", "test-email"])
-    parser.add_argument("--date", dest="run_date", help="运行日期，格式 YYYY-MM-DD，默认今天")
+    parser.add_argument("--date", dest="run_date", help="运行日期，格式 YYYY-MM-DD。close-scan 默认按收盘归属日自动判断。")
     args = parser.parse_args()
+
+    if args.command == "close-scan":
+        run_date = parse_date(args.run_date) if args.run_date else close_scan_default_date()
+        print(f"新增入池：{close_scan(run_date)}")
+        return
 
     run_date = parse_date(args.run_date)
     if args.command == "init-db":
         make_repo()
         print("数据库初始化完成")
-    elif args.command == "close-scan":
-        print(f"新增入池：{close_scan(run_date)}")
     elif args.command == "monitor":
         print(f"通过数量：{monitor(run_date)}")
     elif args.command == "test-email":
