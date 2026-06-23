@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
@@ -24,6 +24,10 @@ class TushareError(RuntimeError):
     pass
 
 
+CacheGet = Callable[[str], str | None]
+CacheSet = Callable[[str, str], None]
+
+
 @dataclass
 class TushareClient:
     token: str
@@ -31,6 +35,8 @@ class TushareClient:
     retry_delay: float = 1.0
     min_call_interval: float = 65.0
     api_url: str = "https://api.tushare.pro"
+    cache_get: CacheGet | None = None
+    cache_set: CacheSet | None = None
     _last_call_at: float = field(default=0.0, init=False, repr=False)
 
     def fetch_momentum_candidates(self, run_date: date | None = None) -> list[StockCandidate]:
@@ -105,6 +111,11 @@ class TushareClient:
         return self._call("daily", {"trade_date": trade_date}, "ts_code,trade_date,close")
 
     def _call(self, api_name: str, params: dict[str, Any], fields: str) -> list[dict[str, Any]]:
+        cache_key = self._cache_key(api_name, params, fields)
+        cached = self._read_cache(cache_key)
+        if cached is not None:
+            return cached
+
         last_error: Exception | None = None
         for attempt in range(self.retries + 1):
             try:
@@ -122,12 +133,42 @@ class TushareClient:
                 data = payload.get("data") or {}
                 columns = data.get("fields") or []
                 items = data.get("items") or []
-                return [dict(zip(columns, item)) for item in items]
+                rows = [dict(zip(columns, item)) for item in items]
+                self._write_cache(cache_key, rows)
+                return rows
             except Exception as exc:
                 last_error = exc
                 if attempt < self.retries:
                     time.sleep(self.retry_delay * (attempt + 1))
-        raise TushareError(f"Tushare 接口失败：{api_name} {json.dumps(params, ensure_ascii=False)}：{last_error}") from last_error
+        raise TushareError(
+            f"Tushare 接口失败：{api_name} {json.dumps(params, ensure_ascii=False)}：{last_error}"
+        ) from last_error
+
+    def _cache_key(self, api_name: str, params: dict[str, Any], fields: str) -> str:
+        payload = json.dumps({"api_name": api_name, "params": params, "fields": fields}, sort_keys=True)
+        return f"tushare:{payload}"
+
+    def _read_cache(self, cache_key: str) -> list[dict[str, Any]] | None:
+        if self.cache_get is None:
+            return None
+        try:
+            payload = self.cache_get(cache_key)
+            if not payload:
+                return None
+            data = json.loads(payload)
+            if isinstance(data, list):
+                return [row for row in data if isinstance(row, dict)]
+        except Exception:
+            return None
+        return None
+
+    def _write_cache(self, cache_key: str, rows: list[dict[str, Any]]) -> None:
+        if self.cache_set is None:
+            return
+        try:
+            self.cache_set(cache_key, json.dumps(rows, ensure_ascii=False, default=str))
+        except Exception:
+            return
 
     def _wait_for_rate_limit(self) -> None:
         if self.min_call_interval <= 0 or self._last_call_at <= 0:
