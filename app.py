@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -127,8 +128,21 @@ def workflow_state() -> tuple[bool, str, list[dict]]:
     if error:
         return False, error, []
     busy_statuses = {"queued", "in_progress", "pending", "waiting", "requested"}
-    busy = any(run.get("status") in busy_statuses for run in runs)
+    busy = any(is_recent_busy_run(run, busy_statuses) for run in runs)
     return busy, "", runs
+
+
+def is_recent_busy_run(run: dict, busy_statuses: set[str]) -> bool:
+    if run.get("status") not in busy_statuses:
+        return False
+    timestamp = run.get("updated_at") or run.get("run_started_at") or run.get("created_at")
+    if not timestamp:
+        return True
+    try:
+        updated_at = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    return datetime.now(timezone.utc) - updated_at <= timedelta(hours=2)
 
 
 def run_status_zh(run: dict) -> str:
