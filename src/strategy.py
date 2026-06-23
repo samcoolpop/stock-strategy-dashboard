@@ -60,6 +60,10 @@ class StrategyDecision:
     def passed(self) -> bool:
         return self.final_status == "passed"
 
+    @property
+    def warning(self) -> bool:
+        return self.final_status in {"warning", "passed"}
+
 
 def evaluate_snapshot(
     volume_ratio: Decimal | None,
@@ -69,7 +73,12 @@ def evaluate_snapshot(
     volume_ratio_ok = volume_ratio is not None and volume_ratio < MAX_VOLUME_RATIO
     turnover_amount_ok = turnover_amount is not None and turnover_amount >= MIN_TURNOVER_AMOUNT
     fund_flow_ok = intraday_fund_flow is not None and intraday_fund_flow > 0
-    final_status = "passed" if volume_ratio_ok and turnover_amount_ok and fund_flow_ok else "watching"
+    if volume_ratio_ok and turnover_amount_ok and fund_flow_ok:
+        final_status = "passed"
+    elif volume_ratio_ok and turnover_amount_ok:
+        final_status = "warning"
+    else:
+        final_status = "watching"
     return StrategyDecision(
         volume_ratio_ok=volume_ratio_ok,
         turnover_amount_ok=turnover_amount_ok,
